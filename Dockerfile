@@ -19,3 +19,9 @@ RUN python3 -m pip install --no-cache-dir --upgrade pip \
   && python3 -m pip install --no-cache-dir \
     faster-whisper \
     ctranslate2
+
+COPY src /app/src
+ENV PYTHONPATH=/app/src
+VOLUME ["/app/output"]
+
+ENTRYPOINT ["python3", "-m", "sermon_transcribe"]

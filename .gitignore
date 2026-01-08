@@ -1,0 +1,5 @@
+# Ignore audio files
+audio/
+.env
+model_cache/
+output/
