@@ -3,3 +3,5 @@ audio/
 .env
 model_cache/
 output/
+__pycache__/
+*.pyc
