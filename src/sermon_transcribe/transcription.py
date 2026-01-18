@@ -9,7 +9,7 @@ from typing import Iterable, List, Optional, Tuple
 import ctranslate2
 from faster_whisper import WhisperModel
 
-from sermon_transcribe.io_utils import ensure_dir, readable_path, unique_path
+from sermon_transcribe.io_utils import ensure_dir, readable_path
 
 
 @dataclass
@@ -52,6 +52,7 @@ def convert_to_flac(source: Path, target_dir: Path) -> Path:
     ensure_dir(target_dir)
     output_path = unique_path(target_dir / f"{source.stem}.flac")
 
+    print(f"Converting to FLAC: {source} -> {output_path}", flush=True)
     command = [
         "ffmpeg",
         "-loglevel",
@@ -74,6 +75,7 @@ def transcribe_file(
     output_dir: Path,
     config: TranscriptionConfig,
     convert_flac: bool,
+    raw_suffix: str,
 ) -> TranscriptionResult:
     ensure_dir(output_dir)
 
@@ -81,6 +83,7 @@ def transcribe_file(
     if convert_flac and source_path.suffix.lower() != ".flac":
         audio_path = convert_to_flac(source_path, output_dir / "_converted")
 
+    print(f"Running transcription on {audio_path}", flush=True)
     segments, info = model.transcribe(
         readable_path(audio_path),
         beam_size=config.beam_size,
@@ -100,7 +103,7 @@ def transcribe_file(
     ]
 
     base_name = source_path.stem
-    text_path, json_path = _unique_output_paths(output_dir, base_name)
+    text_path, json_path = output_paths(output_dir, base_name, raw_suffix)
 
     transcript_text = _format_transcript(segment_list)
     text_path.write_text(transcript_text, encoding="utf-8")
@@ -179,18 +182,8 @@ def _format_transcript(segments: Iterable[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _unique_output_paths(output_dir: Path, base_name: str) -> Tuple[Path, Path]:
-    candidate_text = output_dir / f"{base_name}.txt"
-    candidate_json = output_dir / f"{base_name}.json"
-    if not candidate_text.exists() and not candidate_json.exists():
-        return candidate_text, candidate_json
-
-    for idx in range(1, 10_000):
-        text_path = output_dir / f"{base_name}_{idx}.txt"
-        json_path = output_dir / f"{base_name}_{idx}.json"
-        if not text_path.exists() and not json_path.exists():
-            return text_path, json_path
-
-    text_path = unique_path(output_dir / f"{base_name}.txt")
-    json_path = text_path.with_suffix(".json")
+def output_paths(output_dir: Path, base_name: str, raw_suffix: str) -> Tuple[Path, Path]:
+    suffix = raw_suffix or ""
+    text_path = output_dir / f"{base_name}{suffix}.txt"
+    json_path = output_dir / f"{base_name}{suffix}.json"
     return text_path, json_path
