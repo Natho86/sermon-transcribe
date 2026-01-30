@@ -1,0 +1,9 @@
+services:
+  sermon-transcribe-web:
+    build:
+      dockerfile: Dockerfile.web
+    devices:
+      - nvidia.com/gpu=all
+    environment:
+      - WHISPER_MODEL=${WHISPER_MODEL:-large-v3}
+      - WHISPER_DEVICE=${WHISPER_DEVICE:-auto}
