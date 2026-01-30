@@ -1,0 +1,1326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sermon Transcription Service</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 800px;
+            width: 100%;
+            padding: 40px;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 2em;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+        }
+
+        .upload-area {
+            border: 3px dashed #667eea;
+            border-radius: 15px;
+            padding: 40px;
+            text-align: center;
+            transition: all 0.3s;
+            cursor: pointer;
+            margin-bottom: 20px;
+        }
+
+        .upload-area:hover {
+            background: #f8f9ff;
+            border-color: #764ba2;
+        }
+
+        .upload-area.dragover {
+            background: #f0f3ff;
+            border-color: #764ba2;
+            transform: scale(1.02);
+        }
+
+        .upload-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        .file-name {
+            margin: 15px 0;
+            color: #667eea;
+            font-weight: 600;
+        }
+
+        .cleanup-option {
+            margin: 20px 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .cleanup-option input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+        }
+
+        .cleanup-option label {
+            cursor: pointer;
+            user-select: none;
+        }
+
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 40px;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            width: 100%;
+        }
+
+        button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(102, 126, 234, 0.4);
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .upload-progress {
+            display: none;
+            margin-top: 15px;
+        }
+
+        .upload-progress.active {
+            display: block;
+        }
+
+        .upload-progress-bar {
+            width: 100%;
+            height: 10px;
+            background: #e5e7eb;
+            border-radius: 5px;
+            overflow: hidden;
+            margin-bottom: 10px;
+        }
+
+        .upload-progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.3s;
+            width: 0%;
+        }
+
+        .upload-progress-text {
+            text-align: center;
+            color: #667eea;
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .job-list {
+            margin-top: 30px;
+        }
+
+        .job {
+            background: #f8f9ff;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 15px;
+            transition: all 0.3s;
+        }
+
+        .job-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .job-filename {
+            font-weight: 600;
+            color: #333;
+        }
+
+        .job-status {
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .status-queued {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .status-processing {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        .status-completed {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .status-failed {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #e5e7eb;
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.3s;
+        }
+
+        .job-message {
+            color: #666;
+            font-size: 14px;
+            margin: 10px 0;
+        }
+
+        .download-links {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .download-links a {
+            background: #667eea;
+            color: white;
+            padding: 8px 20px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+
+        .download-links a:hover {
+            background: #764ba2;
+            transform: translateY(-2px);
+        }
+
+        .connection-status {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .connected {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .disconnected {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .system-message {
+            background: #fef3c7;
+            border-left: 4px solid #f59e0b;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+
+        .mode-toggle-btn {
+            transition: all 0.3s;
+        }
+
+        .mode-toggle-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
+        }
+
+        .mode-toggle-btn.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+            color: white !important;
+            border-color: #667eea !important;
+        }
+
+        .job.compact {
+            padding: 12px 15px;
+            margin-bottom: 8px;
+        }
+
+        .job.compact .job-header {
+            margin-bottom: 5px;
+        }
+
+        .job.compact .progress-bar {
+            height: 4px;
+            margin: 5px 0;
+        }
+
+        .job.compact .job-message {
+            font-size: 12px;
+            margin: 5px 0 0 0;
+        }
+
+        .job.compact .download-links {
+            margin-top: 8px;
+            gap: 5px;
+        }
+
+        .job.compact .download-links a {
+            padding: 5px 12px;
+            font-size: 12px;
+        }
+
+        .delete-btn {
+            background: #ef4444;
+            color: white;
+            padding: 8px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-top: 10px;
+        }
+
+        .delete-btn:hover {
+            background: #dc2626;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(239, 68, 68, 0.4);
+        }
+
+        .job.compact .delete-btn {
+            padding: 5px 12px;
+            font-size: 12px;
+            margin-top: 5px;
+        }
+
+        .job-actions {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin-top: 10px;
+        }
+
+        .job.compact .job-actions {
+            margin-top: 5px;
+        }
+
+        /* File Queue Styles */
+        .queue-item {
+            background: #f8f9ff;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 10px;
+            border-left: 4px solid #667eea;
+        }
+
+        .queue-item.uploading {
+            border-left-color: #3b82f6;
+            background: #dbeafe;
+        }
+
+        .queue-item.completed {
+            border-left-color: #10b981;
+            background: #d1fae5;
+        }
+
+        .queue-item.error {
+            border-left-color: #ef4444;
+            background: #fee2e2;
+        }
+
+        .queue-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .queue-filename {
+            font-weight: 600;
+            color: #333;
+            font-size: 14px;
+        }
+
+        .queue-status {
+            font-size: 12px;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-weight: 600;
+        }
+
+        .queue-status.pending {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .queue-status.uploading {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        .queue-status.processing {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        .queue-status.completed {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .queue-status.error {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .queue-progress-bar {
+            width: 100%;
+            height: 6px;
+            background: #e5e7eb;
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 8px;
+        }
+
+        .queue-progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.3s;
+            width: 0%;
+        }
+
+        .queue-message {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
+
+        .queue-remove {
+            background: none;
+            border: none;
+            color: #ef4444;
+            cursor: pointer;
+            font-size: 18px;
+            padding: 0;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            transition: background 0.3s;
+        }
+
+        .queue-remove:hover {
+            background: #fee2e2;
+        }
+
+        .queue-remove:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
+
+        .jobs-section h2 {
+            margin-bottom: 15px;
+            color: #333;
+            font-size: 1.3em;
+        }
+
+        .jobs-section h3 {
+            margin: 20px 0 10px 0;
+            color: #666;
+            font-size: 1em;
+            font-weight: 600;
+        }
+
+        /* Modal styles */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal.show {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 15px;
+            width: 90%;
+            max-width: 800px;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            animation: modalSlideIn 0.3s ease-out;
+        }
+
+        @keyframes modalSlideIn {
+            from {
+                transform: translateY(-50px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        .modal-header {
+            padding: 20px 25px;
+            border-bottom: 2px solid #f0f3ff;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-title {
+            font-size: 1.3em;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 24px;
+            color: #999;
+            cursor: pointer;
+            width: 30px;
+            height: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            transition: all 0.3s;
+        }
+
+        .modal-close:hover {
+            background: #f0f3ff;
+            color: #667eea;
+        }
+
+        .modal-body {
+            padding: 25px;
+            overflow-y: auto;
+            flex: 1;
+        }
+
+        .modal-body pre {
+            background: #f8f9ff;
+            padding: 15px;
+            border-radius: 8px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            line-height: 1.6;
+            color: #333;
+            max-height: 50vh;
+            overflow-y: auto;
+        }
+
+        .modal-footer {
+            padding: 20px 25px;
+            border-top: 2px solid #f0f3ff;
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+        }
+
+        .modal-btn {
+            padding: 12px 25px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .modal-btn.primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .modal-btn.primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .modal-btn.secondary {
+            background: #e5e7eb;
+            color: #666;
+        }
+
+        .modal-btn.secondary:hover {
+            background: #d1d5db;
+        }
+
+        .loading-spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f4f6;
+            border-top-color: #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div id="connectionStatus" class="connection-status disconnected">Connecting...</div>
+
+    <div class="container">
+        <h1>🎙️ Sermon Transcription</h1>
+        <p class="subtitle">Upload your audio files for AI-powered transcription and summarization</p>
+
+        <div id="systemMessages"></div>
+
+        <!-- Upload Mode Toggle -->
+        <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+            <button class="mode-toggle-btn active" id="audioModeBtn" style="flex: 1; padding: 12px; border: 2px solid #667eea; border-radius: 10px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-weight: 600; cursor: pointer;">
+                🎙️ Upload Audio
+            </button>
+            <button class="mode-toggle-btn" id="transcriptModeBtn" style="flex: 1; padding: 12px; border: 2px solid #ddd; border-radius: 10px; background: white; color: #666; font-weight: 600; cursor: pointer;">
+                📄 Upload Transcript
+            </button>
+        </div>
+
+        <div class="upload-area" id="uploadArea">
+            <div class="upload-icon">📁</div>
+            <p id="uploadPrompt"><strong>Click to browse</strong> or drag and drop your audio files here</p>
+            <p id="uploadHint" style="color: #999; font-size: 14px; margin-top: 10px;">Supported: WAV, MP3, FLAC, M4A, AAC (max 4GB per file)</p>
+            <input type="file" id="fileInput" accept=".wav,.mp3,.flac,.m4a,.aac" multiple>
+            <div class="file-name" id="fileName"></div>
+        </div>
+
+        <!-- File Queue -->
+        <div id="fileQueue" style="display: none; margin: 20px 0;">
+            <h3 style="color: #333; font-size: 1.1em; margin-bottom: 10px;">Upload Queue</h3>
+            <div id="queueList"></div>
+        </div>
+
+        <div class="cleanup-option">
+            <input type="checkbox" id="cleanupCheckbox" checked>
+            <label for="cleanupCheckbox">
+                <strong>Clean and summarize transcript with AI</strong>
+                <br>
+                <span style="font-size: 14px; color: #666;">Uses Claude to format text and generate summary (requires API key)</span>
+            </label>
+        </div>
+
+        <div id="audioConversionOptions" class="cleanup-option" style="display: block;">
+            <div style="margin-bottom: 10px;">
+                <strong style="color: #333;">Audio Conversion Options</strong>
+                <br>
+                <span style="font-size: 14px; color: #666;">Convert to mono and normalize to -20 LUFS</span>
+            </div>
+            <div style="display: flex; gap: 20px; margin-left: 10px;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <input type="checkbox" id="convertM4aCheckbox">
+                    <label for="convertM4aCheckbox" style="cursor: pointer; user-select: none;">Convert to M4A</label>
+                </div>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <input type="checkbox" id="convertFlacCheckbox">
+                    <label for="convertFlacCheckbox" style="cursor: pointer; user-select: none;">Convert to FLAC</label>
+                </div>
+            </div>
+        </div>
+
+        <button id="uploadBtn" disabled>Select files to upload</button>
+        <p style="color: #999; font-size: 13px; margin-top: 10px; text-align: center;">
+            💡 <strong>Multiple files:</strong> Files will be uploaded, then processed one at a time in order to prevent resource conflicts
+        </p>
+
+        <div class="upload-progress" id="uploadProgress">
+            <div class="upload-progress-bar">
+                <div class="upload-progress-fill" id="uploadProgressFill"></div>
+            </div>
+            <div class="upload-progress-text" id="uploadProgressText">Uploading: 0%</div>
+        </div>
+
+        <div class="job-list" id="jobList"></div>
+    </div>
+
+    <!-- Modal for viewing files -->
+    <div class="modal" id="fileModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title" id="modalTitle">File Preview</div>
+                <button class="modal-close" id="modalClose">×</button>
+            </div>
+            <div class="modal-body">
+                <pre id="modalContent">Loading...</pre>
+            </div>
+            <div class="modal-footer">
+                <button class="modal-btn secondary" id="modalCancelBtn">Cancel</button>
+                <button class="modal-btn primary" id="modalDownloadBtn">📥 Download</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const fileName = document.getElementById('fileName');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const jobList = document.getElementById('jobList');
+        const cleanupCheckbox = document.getElementById('cleanupCheckbox');
+        const connectionStatus = document.getElementById('connectionStatus');
+        const systemMessages = document.getElementById('systemMessages');
+        const audioModeBtn = document.getElementById('audioModeBtn');
+        const transcriptModeBtn = document.getElementById('transcriptModeBtn');
+        const uploadPrompt = document.getElementById('uploadPrompt');
+        const uploadHint = document.getElementById('uploadHint');
+        const audioConversionOptions = document.getElementById('audioConversionOptions');
+        const convertM4aCheckbox = document.getElementById('convertM4aCheckbox');
+        const convertFlacCheckbox = document.getElementById('convertFlacCheckbox');
+
+        let selectedFiles = [];
+        let jobs = {};
+        let uploadMode = 'audio'; // 'audio' or 'transcript'
+        let isUploading = false;
+        let uploadQueue = [];
+
+        // Modal elements
+        const fileModal = document.getElementById('fileModal');
+        const modalTitle = document.getElementById('modalTitle');
+        const modalContent = document.getElementById('modalContent');
+        const modalClose = document.getElementById('modalClose');
+        const modalCancelBtn = document.getElementById('modalCancelBtn');
+        const modalDownloadBtn = document.getElementById('modalDownloadBtn');
+
+        let currentFileUrl = null;
+        let currentFileName = null;
+
+        // Queue elements
+        const fileQueue = document.getElementById('fileQueue');
+        const queueList = document.getElementById('queueList');
+
+        // Load existing jobs on page load
+        async function loadExistingJobs() {
+            try {
+                const response = await fetch('/jobs');
+                const data = await response.json();
+                if (data.jobs) {
+                    data.jobs.forEach(job => {
+                        jobs[job.job_id] = job;
+                    });
+                    renderJobs();
+                }
+            } catch (error) {
+                console.error('Failed to load existing jobs:', error);
+            }
+        }
+
+        // Load existing jobs when page loads
+        loadExistingJobs();
+
+        // Mode toggle handlers
+        audioModeBtn.addEventListener('click', () => {
+            uploadMode = 'audio';
+            audioModeBtn.classList.add('active');
+            transcriptModeBtn.classList.remove('active');
+            fileInput.accept = '.wav,.mp3,.flac,.m4a,.aac';
+            uploadPrompt.innerHTML = '<strong>Click to browse</strong> or drag and drop your audio files here';
+            uploadHint.textContent = 'Supported: WAV, MP3, FLAC, M4A, AAC (max 4GB per file)';
+            audioConversionOptions.style.display = 'block';
+            resetUpload();
+        });
+
+        transcriptModeBtn.addEventListener('click', () => {
+            uploadMode = 'transcript';
+            transcriptModeBtn.classList.add('active');
+            audioModeBtn.classList.remove('active');
+            fileInput.accept = '.txt';
+            uploadPrompt.innerHTML = '<strong>Click to browse</strong> or drag and drop your transcript files here';
+            uploadHint.textContent = 'Supported: Plain text files (.txt) in UTF-8 encoding';
+            audioConversionOptions.style.display = 'none';
+            resetUpload();
+        });
+
+        function resetUpload() {
+            selectedFiles = [];
+            fileInput.value = '';
+            fileName.textContent = '';
+            uploadBtn.disabled = true;
+            uploadBtn.textContent = 'Select files to upload';
+            fileQueue.style.display = 'none';
+            queueList.innerHTML = '';
+        }
+
+        // Handle removing files from queue
+        document.addEventListener('click', (e) => {
+            if (e.target.classList.contains('queue-remove')) {
+                const index = parseInt(e.target.dataset.index);
+                selectedFiles.splice(index, 1);
+                updateFileSelection();
+            }
+        });
+
+        // WebSocket connection status
+        socket.on('connect', () => {
+            connectionStatus.textContent = '🟢 Connected';
+            connectionStatus.className = 'connection-status connected';
+        });
+
+        socket.on('disconnect', () => {
+            connectionStatus.textContent = '🔴 Disconnected';
+            connectionStatus.className = 'connection-status disconnected';
+        });
+
+        // System messages
+        socket.on('system', (data) => {
+            const msg = document.createElement('div');
+            msg.className = 'system-message';
+            msg.textContent = data.message;
+            systemMessages.appendChild(msg);
+        });
+
+        // Progress updates
+        socket.on('progress', (data) => {
+            updateJob(data);
+        });
+
+        // File selection
+        uploadArea.addEventListener('click', () => fileInput.click());
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                selectedFiles = Array.from(e.target.files);
+                updateFileSelection();
+            }
+        });
+
+        function updateFileSelection() {
+            if (selectedFiles.length === 0) {
+                fileName.textContent = '';
+                uploadBtn.disabled = true;
+                uploadBtn.textContent = 'Select files to upload';
+                fileQueue.style.display = 'none';
+                return;
+            }
+
+            if (selectedFiles.length === 1) {
+                fileName.textContent = `Selected: ${selectedFiles[0].name}`;
+            } else {
+                fileName.textContent = `Selected: ${selectedFiles.length} files`;
+            }
+
+            uploadBtn.disabled = false;
+            uploadBtn.textContent = `Upload ${selectedFiles.length} file${selectedFiles.length > 1 ? 's' : ''}`;
+
+            // Show queue
+            displayQueue();
+        }
+
+        function displayQueue() {
+            if (selectedFiles.length === 0) {
+                fileQueue.style.display = 'none';
+                return;
+            }
+
+            fileQueue.style.display = 'block';
+            queueList.innerHTML = '';
+
+            selectedFiles.forEach((file, index) => {
+                const queueItem = document.createElement('div');
+                queueItem.className = 'queue-item';
+                queueItem.dataset.index = index;
+
+                queueItem.innerHTML = `
+                    <div class="queue-header">
+                        <div class="queue-filename">${file.name}</div>
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <div class="queue-status pending">Pending</div>
+                            <button class="queue-remove" data-index="${index}" ${isUploading ? 'disabled' : ''}>×</button>
+                        </div>
+                    </div>
+                    <div class="queue-progress-bar">
+                        <div class="queue-progress-fill"></div>
+                    </div>
+                    <div class="queue-message">Size: ${formatBytes(file.size)}</div>
+                `;
+
+                queueList.appendChild(queueItem);
+            });
+        }
+
+        // Drag and drop
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+
+            if (e.dataTransfer.files.length > 0) {
+                selectedFiles = Array.from(e.dataTransfer.files);
+                fileInput.files = e.dataTransfer.files;
+                updateFileSelection();
+            }
+        });
+
+        // Upload
+        uploadBtn.addEventListener('click', () => {
+            if (selectedFiles.length === 0) return;
+
+            uploadBtn.disabled = true;
+            isUploading = true;
+
+            // Disable remove buttons
+            document.querySelectorAll('.queue-remove').forEach(btn => btn.disabled = true);
+
+            // Start processing queue
+            uploadQueue = selectedFiles.map((file, index) => ({
+                file: file,
+                index: index,
+                status: 'pending'
+            }));
+
+            processNextFile();
+        });
+
+        function processNextFile() {
+            // Find next pending file
+            const nextItem = uploadQueue.find(item => item.status === 'pending');
+            if (!nextItem) {
+                // All files processed
+                isUploading = false;
+                selectedFiles = [];
+                fileInput.value = '';
+                fileName.textContent = '';
+                uploadBtn.disabled = true;
+                uploadBtn.textContent = 'Select files to upload';
+
+                // Hide queue after a delay
+                setTimeout(() => {
+                    fileQueue.style.display = 'none';
+                    queueList.innerHTML = '';
+                }, 3000);
+                return;
+            }
+
+            nextItem.status = 'uploading';
+            uploadFile(nextItem.file, nextItem.index);
+        }
+
+        function uploadFile(file, index) {
+            const queueItem = queueList.querySelector(`[data-index="${index}"]`);
+            const statusEl = queueItem.querySelector('.queue-status');
+            const progressFill = queueItem.querySelector('.queue-progress-fill');
+            const messageEl = queueItem.querySelector('.queue-message');
+
+            queueItem.classList.add('uploading');
+            statusEl.className = 'queue-status uploading';
+            statusEl.textContent = 'Uploading';
+
+            const formData = new FormData();
+            const fieldName = uploadMode === 'audio' ? 'audio' : 'transcript';
+            formData.append(fieldName, file);
+            formData.append('cleanup', cleanupCheckbox.checked);
+
+            // Add audio conversion options if in audio mode
+            if (uploadMode === 'audio') {
+                formData.append('convert_m4a', convertM4aCheckbox.checked);
+                formData.append('convert_flac', convertFlacCheckbox.checked);
+            }
+
+            const xhr = new XMLHttpRequest();
+            const endpoint = uploadMode === 'audio' ? '/upload' : '/upload-transcript';
+
+            // Track upload progress
+            xhr.upload.addEventListener('progress', (e) => {
+                if (e.lengthComputable) {
+                    const percentComplete = Math.round((e.loaded / e.total) * 100);
+                    progressFill.style.width = percentComplete + '%';
+                    messageEl.textContent = `Uploading: ${percentComplete}% (${formatBytes(e.loaded)} / ${formatBytes(e.total)})`;
+                }
+            });
+
+            // Handle completion
+            xhr.addEventListener('load', () => {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    try {
+                        const data = JSON.parse(xhr.responseText);
+                        jobs[data.job_id] = {
+                            job_id: data.job_id,
+                            filename: file.name,
+                            status: 'queued',
+                            progress: 0,
+                            message: 'Uploaded successfully'
+                        };
+                        renderJobs();
+
+                        queueItem.classList.remove('uploading');
+                        queueItem.classList.add('completed');
+                        statusEl.className = 'queue-status completed';
+                        statusEl.textContent = 'Completed';
+                        progressFill.style.width = '100%';
+                        messageEl.textContent = 'Upload complete - Processing...';
+
+                        const queueItemObj = uploadQueue.find(item => item.index === index);
+                        if (queueItemObj) queueItemObj.status = 'completed';
+
+                        // Process next file after a short delay
+                        setTimeout(() => processNextFile(), 500);
+                    } catch (error) {
+                        handleUploadError(index, 'Invalid response');
+                    }
+                } else {
+                    try {
+                        const data = JSON.parse(xhr.responseText);
+                        handleUploadError(index, data.error || 'Unknown error');
+                    } catch {
+                        handleUploadError(index, 'Server error');
+                    }
+                }
+            });
+
+            // Handle errors
+            xhr.addEventListener('error', () => {
+                handleUploadError(index, 'Network error');
+            });
+
+            // Send request
+            xhr.open('POST', endpoint);
+            xhr.send(formData);
+        }
+
+        function handleUploadError(index, errorMessage) {
+            const queueItem = queueList.querySelector(`[data-index="${index}"]`);
+            const statusEl = queueItem.querySelector('.queue-status');
+            const messageEl = queueItem.querySelector('.queue-message');
+
+            queueItem.classList.remove('uploading');
+            queueItem.classList.add('error');
+            statusEl.className = 'queue-status error';
+            statusEl.textContent = 'Failed';
+            messageEl.textContent = `Error: ${errorMessage}`;
+
+            const queueItemObj = uploadQueue.find(item => item.index === index);
+            if (queueItemObj) queueItemObj.status = 'error';
+
+            // Continue with next file
+            setTimeout(() => processNextFile(), 500);
+        }
+
+        // Format bytes for display
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+        }
+
+        function updateJob(data) {
+            jobs[data.job_id] = { ...jobs[data.job_id], ...data };
+            renderJobs();
+        }
+
+        function renderJobs() {
+            if (Object.keys(jobs).length === 0) {
+                jobList.innerHTML = '';
+                return;
+            }
+
+            // Sort jobs by created_at, newest first
+            const sortedJobs = Object.values(jobs).sort((a, b) => {
+                return new Date(b.created_at) - new Date(a.created_at);
+            });
+
+            jobList.innerHTML = '<div class="jobs-section"></div>';
+            const jobsSection = jobList.querySelector('.jobs-section');
+
+            // Render latest job (expanded)
+            if (sortedJobs.length > 0) {
+                const latestJob = sortedJobs[0];
+                jobsSection.innerHTML += '<h2>Latest Job</h2>';
+                const latestJobEl = createJobElement(latestJob, false);
+                jobsSection.appendChild(latestJobEl);
+            }
+
+            // Render other jobs (compact)
+            if (sortedJobs.length > 1) {
+                jobsSection.innerHTML += '<h3>Previous Jobs</h3>';
+                sortedJobs.slice(1).forEach(job => {
+                    const jobEl = createJobElement(job, true);
+                    jobsSection.appendChild(jobEl);
+                });
+            }
+        }
+
+        function createJobElement(job, compact) {
+            const jobEl = document.createElement('div');
+            jobEl.className = compact ? 'job compact' : 'job';
+
+            const statusClass = `status-${job.status}`;
+
+            let jobActions = '';
+            if (job.status === 'completed') {
+                jobActions = `
+                    <div class="download-links">
+                        <a href="/review/${job.job_id}">🔍 Review & Edit</a>
+                        <a href="#" class="view-file" data-url="/download/${job.job_id}/text" data-type="text" data-filename="${job.filename}">📄 Transcript</a>
+                        ${job.json_url ? `<a href="#" class="view-file" data-url="/download/${job.job_id}/json" data-type="json" data-filename="${job.filename}">📊 JSON</a>` : ''}
+                        ${job.summary_url ? `<a href="#" class="view-file" data-url="${job.summary_url}" data-type="summary" data-filename="${job.filename}">📝 Summary</a>` : ''}
+                        ${job.m4a_url ? `<a href="${job.m4a_url}" download>🎵 M4A</a>` : ''}
+                        ${job.flac_url ? `<a href="${job.flac_url}" download>🎵 FLAC</a>` : ''}
+                    </div>
+                    <div class="job-actions">
+                        <button class="delete-btn" data-job-id="${job.job_id}">🗑️ Delete</button>
+                    </div>
+                `;
+            } else if (job.status === 'failed') {
+                jobActions = `
+                    <div class="job-actions">
+                        <button class="delete-btn" data-job-id="${job.job_id}">🗑️ Delete</button>
+                    </div>
+                `;
+            }
+
+            jobEl.innerHTML = `
+                <div class="job-header">
+                    <div class="job-filename">${job.filename}</div>
+                    <div class="job-status ${statusClass}">${job.status}</div>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" style="width: ${job.progress}%"></div>
+                </div>
+                <div class="job-message">${job.message}</div>
+                ${jobActions}
+            `;
+
+            return jobEl;
+        }
+
+        // Modal functions
+        function openFileModal(url, type, filename) {
+            currentFileUrl = url;
+            currentFileName = filename;
+
+            // Set modal title
+            const typeLabels = {
+                'text': 'Transcript',
+                'json': 'JSON Data',
+                'summary': 'Summary'
+            };
+            modalTitle.textContent = `${typeLabels[type] || 'File'} - ${filename}`;
+
+            // Show loading
+            modalContent.innerHTML = '<div class="loading-spinner"></div> Loading...';
+            fileModal.classList.add('show');
+
+            // Fetch file content
+            fetch(url)
+                .then(response => {
+                    if (!response.ok) throw new Error('Failed to load file');
+                    return response.text();
+                })
+                .then(content => {
+                    if (type === 'json') {
+                        // Pretty print JSON
+                        try {
+                            const jsonData = JSON.parse(content);
+                            modalContent.textContent = JSON.stringify(jsonData, null, 2);
+                        } catch (e) {
+                            modalContent.textContent = content;
+                        }
+                    } else {
+                        modalContent.textContent = content;
+                    }
+                })
+                .catch(error => {
+                    modalContent.textContent = 'Error loading file: ' + error.message;
+                });
+        }
+
+        function closeFileModal() {
+            fileModal.classList.remove('show');
+            currentFileUrl = null;
+            currentFileName = null;
+        }
+
+        function downloadCurrentFile() {
+            if (currentFileUrl) {
+                const a = document.createElement('a');
+                a.href = currentFileUrl;
+                a.download = currentFileName;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                closeFileModal();
+            }
+        }
+
+        // Modal event listeners
+        modalClose.addEventListener('click', closeFileModal);
+        modalCancelBtn.addEventListener('click', closeFileModal);
+        modalDownloadBtn.addEventListener('click', downloadCurrentFile);
+
+        // Close modal when clicking outside
+        fileModal.addEventListener('click', (e) => {
+            if (e.target === fileModal) {
+                closeFileModal();
+            }
+        });
+
+        // Escape key to close modal
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && fileModal.classList.contains('show')) {
+                closeFileModal();
+            }
+        });
+
+        // Event delegation for view-file links
+        document.addEventListener('click', (e) => {
+            if (e.target.classList.contains('view-file') || e.target.closest('.view-file')) {
+                e.preventDefault();
+                const link = e.target.classList.contains('view-file') ? e.target : e.target.closest('.view-file');
+                const url = link.dataset.url;
+                const type = link.dataset.type;
+                const filename = link.dataset.filename;
+                openFileModal(url, type, filename);
+            }
+
+            // Handle delete button clicks
+            if (e.target.classList.contains('delete-btn') || e.target.closest('.delete-btn')) {
+                const btn = e.target.classList.contains('delete-btn') ? e.target : e.target.closest('.delete-btn');
+                const jobId = btn.dataset.jobId;
+                deleteJob(jobId);
+            }
+        });
+
+        // Delete job function
+        async function deleteJob(jobId) {
+            const job = jobs[jobId];
+            if (!job) return;
+
+            if (!confirm(`Are you sure you want to delete "${job.filename}"?\n\nThis will permanently remove all files associated with this job.`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/job/${jobId}`, {
+                    method: 'DELETE'
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    // Remove from local jobs object
+                    delete jobs[jobId];
+                    renderJobs();
+
+                    // Show success message
+                    showSimpleNotification('✅ Job deleted successfully', 'success');
+                } else {
+                    alert('Failed to delete job: ' + data.error);
+                }
+            } catch (error) {
+                alert('Error deleting job: ' + error.message);
+            }
+        }
+
+        // Simple notification function
+        function showSimpleNotification(message, type = 'success') {
+            const notif = document.createElement('div');
+            notif.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                padding: 15px 25px;
+                background: ${type === 'success' ? '#d1fae5' : '#fee2e2'};
+                border-left: 4px solid ${type === 'success' ? '#10b981' : '#ef4444'};
+                border-radius: 8px;
+                box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+                z-index: 10000;
+                color: #333;
+                font-weight: 600;
+                animation: slideIn 0.3s;
+            `;
+            notif.textContent = message;
+            document.body.appendChild(notif);
+
+            setTimeout(() => {
+                notif.style.opacity = '0';
+                notif.style.transition = 'opacity 0.3s';
+                setTimeout(() => document.body.removeChild(notif), 300);
+            }, 3000);
+        }
+    </script>
+</body>
+</html>

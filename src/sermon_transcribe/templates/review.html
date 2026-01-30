@@ -1,0 +1,973 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Review Transcript - {{ job.filename }}</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f5f7fa;
+            min-height: 100vh;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px 30px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        .header-content {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .back-link {
+            color: white;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 500;
+            transition: opacity 0.3s;
+        }
+
+        .back-link:hover {
+            opacity: 0.8;
+        }
+
+        .title {
+            font-size: 1.5em;
+            font-weight: 600;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 30px;
+        }
+
+        .audio-section {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 25px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+        }
+
+        .audio-title {
+            font-size: 1.1em;
+            font-weight: 600;
+            margin-bottom: 15px;
+            color: #333;
+        }
+
+        .audio-player {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .audio-controls {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        .control-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .control-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .control-btn.secondary {
+            background: #6c757d;
+        }
+
+        .control-btn.secondary:hover {
+            box-shadow: 0 5px 15px rgba(108, 117, 125, 0.4);
+        }
+
+        .time-display {
+            font-family: 'Courier New', monospace;
+            font-size: 16px;
+            font-weight: 600;
+            color: #667eea;
+            padding: 8px 15px;
+            background: #f0f3ff;
+            border-radius: 8px;
+        }
+
+        .seek-bar {
+            width: 100%;
+            height: 8px;
+            border-radius: 4px;
+            background: #e5e7eb;
+            outline: none;
+            cursor: pointer;
+        }
+
+        .seek-bar::-webkit-slider-thumb {
+            appearance: none;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #667eea;
+            cursor: pointer;
+        }
+
+        .seek-bar::-moz-range-thumb {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #667eea;
+            cursor: pointer;
+            border: none;
+        }
+
+        .editor-section {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+        }
+
+        .editor-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .editor-title {
+            font-size: 1.1em;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            color: #666;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #10b981;
+        }
+
+        .status-dot.unsaved {
+            background: #f59e0b;
+        }
+
+        .transcript-editor {
+            width: 100%;
+            min-height: 500px;
+            padding: 15px;
+            border: 2px solid #e5e7eb;
+            border-radius: 10px;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-size: 15px;
+            line-height: 1.6;
+            resize: vertical;
+            transition: border-color 0.3s;
+        }
+
+        .transcript-editor:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .editor-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+            flex-wrap: wrap;
+        }
+
+        .action-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 25px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .action-btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .action-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .action-btn.reload {
+            background: #6c757d;
+        }
+
+        .action-btn.reload:hover:not(:disabled) {
+            box-shadow: 0 5px 15px rgba(108, 117, 125, 0.4);
+        }
+
+        .action-btn.download {
+            background: #10b981;
+        }
+
+        .action-btn.download:hover {
+            box-shadow: 0 5px 15px rgba(16, 185, 129, 0.4);
+        }
+
+        .action-btn.regenerate {
+            background: #f59e0b;
+        }
+
+        .action-btn.regenerate:hover:not(:disabled) {
+            box-shadow: 0 5px 15px rgba(245, 158, 11, 0.4);
+        }
+
+        .keyboard-hint {
+            margin-top: 15px;
+            padding: 12px;
+            background: #f0f3ff;
+            border-radius: 8px;
+            font-size: 13px;
+            color: #667eea;
+        }
+
+        .keyboard-hint strong {
+            color: #764ba2;
+        }
+
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 15px 25px;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            display: none;
+            z-index: 1000;
+            animation: slideIn 0.3s;
+        }
+
+        .notification.show {
+            display: block;
+        }
+
+        .notification.success {
+            border-left: 4px solid #10b981;
+        }
+
+        .notification.error {
+            border-left: 4px solid #ef4444;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(400px);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        /* Segment highlighting styles */
+        .transcript-view {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            max-height: 600px;
+            overflow-y: auto;
+            line-height: 1.8;
+            font-size: 15px;
+            color: #333;
+        }
+
+        .segment {
+            display: inline;
+            cursor: pointer;
+            transition: background-color 0.2s, color 0.2s;
+            padding: 2px 0;
+            border-radius: 3px;
+        }
+
+        .segment:hover {
+            background-color: #f0f3ff;
+            color: #667eea;
+        }
+
+        .segment.active {
+            background-color: #667eea;
+            color: white;
+            padding: 3px 5px;
+            border-radius: 4px;
+            font-weight: 500;
+        }
+
+        .segment.edited {
+            color: #dc2626;
+            cursor: not-allowed;
+            font-style: italic;
+        }
+
+        .segment.edited:hover {
+            background-color: #fee2e2;
+            color: #dc2626;
+        }
+
+        .segment.edited.active {
+            background-color: #fca5a5;
+            color: #7f1d1d;
+        }
+
+        .mode-toggle {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .mode-btn {
+            background: #e5e7eb;
+            color: #6b7280;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .mode-btn.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .editor-container {
+            display: none;
+        }
+
+        .editor-container.active {
+            display: block;
+        }
+
+        .view-container {
+            display: none;
+        }
+
+        .view-container.active {
+            display: block;
+        }
+
+        .sync-info {
+            background: #f0f9ff;
+            border-left: 4px solid #667eea;
+            padding: 10px 15px;
+            border-radius: 6px;
+            font-size: 13px;
+            color: #1e40af;
+            margin-bottom: 15px;
+        }
+
+        .sync-info strong {
+            color: #667eea;
+        }
+
+        .sync-info .edited-example {
+            color: #dc2626;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-content">
+            <a href="/" class="back-link">
+                <span>←</span>
+                <span>Back to Jobs</span>
+            </a>
+            <div class="title">{{ job.filename }}</div>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Audio Player Section -->
+        <div class="audio-section">
+            <div class="audio-title">🎙️ Audio Player</div>
+            <div class="audio-player">
+                <audio id="audioPlayer" preload="metadata">
+                    <source src="/api/audio/{{ job.job_id }}" type="audio/wav">
+                    Your browser does not support the audio element.
+                </audio>
+
+                <input type="range" class="seek-bar" id="seekBar" value="0" min="0" max="100" step="0.1">
+
+                <div class="audio-controls">
+                    <button class="control-btn secondary" id="skip-back">◀◀ 10s</button>
+                    <button class="control-btn" id="playPauseBtn">▶️ Play</button>
+                    <button class="control-btn secondary" id="skip-forward">10s ▶▶</button>
+                    <div class="time-display">
+                        <span id="currentTime">00:00</span> / <span id="duration">00:00</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Transcript Editor Section -->
+        <div class="editor-section">
+            <div class="editor-header">
+                <div class="editor-title">📝 Transcript</div>
+                <div class="status-indicator">
+                    <div class="status-dot" id="statusDot"></div>
+                    <span id="statusText">Saved</span>
+                </div>
+            </div>
+
+            <!-- Mode Toggle -->
+            <div class="mode-toggle">
+                <button class="mode-btn active" id="viewModeBtn">👁️ View & Sync</button>
+                <button class="mode-btn" id="editModeBtn">✏️ Edit</button>
+            </div>
+
+            <!-- View Mode (with segments) -->
+            <div class="view-container active" id="viewContainer">
+                <div class="sync-info">
+                    <strong>💡 Audio Sync:</strong> Click on any text to jump to that moment in the audio.
+                    <span class="edited-example">Red italic text</span> indicates edited segments that cannot be synced.
+                </div>
+                <div class="transcript-view" id="transcriptView">
+                    Loading transcript segments...
+                </div>
+            </div>
+
+            <!-- Edit Mode (textarea) -->
+            <div class="editor-container" id="editorContainer">
+                <textarea class="transcript-editor" id="transcriptEditor" placeholder="Loading transcript..."></textarea>
+
+                <div class="editor-actions">
+                    <button class="action-btn" id="saveBtn">💾 Save</button>
+                    <button class="action-btn reload" id="reloadBtn">🔄 Reload</button>
+                    <button class="action-btn download" id="downloadBtn">📥 Download</button>
+                    <button class="action-btn" id="regenerateBtn" style="background: #f59e0b;">🤖 Regenerate Clean Version</button>
+                </div>
+            </div>
+
+            <div class="keyboard-hint">
+                <strong>Keyboard Shortcuts:</strong>
+                Space = Play/Pause |
+                Left/Right Arrows = Skip ±10s |
+                Ctrl+S = Save (Edit mode) |
+                Click on text to seek audio (View mode)
+            </div>
+        </div>
+    </div>
+
+    <div class="notification" id="notification"></div>
+
+    <script>
+        const jobId = "{{ job.job_id }}";
+        const audioPlayer = document.getElementById('audioPlayer');
+        const playPauseBtn = document.getElementById('playPauseBtn');
+        const skipBackBtn = document.getElementById('skip-back');
+        const skipForwardBtn = document.getElementById('skip-forward');
+        const seekBar = document.getElementById('seekBar');
+        const currentTimeEl = document.getElementById('currentTime');
+        const durationEl = document.getElementById('duration');
+        const transcriptEditor = document.getElementById('transcriptEditor');
+        const transcriptView = document.getElementById('transcriptView');
+        const viewModeBtn = document.getElementById('viewModeBtn');
+        const editModeBtn = document.getElementById('editModeBtn');
+        const viewContainer = document.getElementById('viewContainer');
+        const editorContainer = document.getElementById('editorContainer');
+        const saveBtn = document.getElementById('saveBtn');
+        const reloadBtn = document.getElementById('reloadBtn');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const regenerateBtn = document.getElementById('regenerateBtn');
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
+        const notification = document.getElementById('notification');
+
+        let originalContent = '';
+        let isSaved = true;
+        let segments = [];
+        let currentSegmentIndex = -1;
+        let editedText = '';
+        let hasManualEdits = false;
+        let originalBackupText = '';
+
+        // Format time as MM:SS
+        function formatTime(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+        }
+
+        // Show notification
+        function showNotification(message, type = 'success') {
+            notification.textContent = message;
+            notification.className = `notification show ${type}`;
+            setTimeout(() => {
+                notification.classList.remove('show');
+            }, 3000);
+        }
+
+        // Update status indicator
+        function updateStatus(saved) {
+            isSaved = saved;
+            if (saved) {
+                statusDot.classList.remove('unsaved');
+                statusText.textContent = 'Saved';
+            } else {
+                statusDot.classList.add('unsaved');
+                statusText.textContent = 'Unsaved changes';
+            }
+        }
+
+        // Load transcript
+        async function loadTranscript() {
+            try {
+                const response = await fetch(`/api/transcript/${jobId}`);
+                const data = await response.json();
+
+                if (response.ok) {
+                    transcriptEditor.value = data.content;
+                    originalContent = data.content;
+                    editedText = data.content;
+                    hasManualEdits = data.has_manual_edits || false;
+                    originalBackupText = data.original_content || '';
+                    updateStatus(true);
+                } else {
+                    showNotification('Failed to load transcript: ' + data.error, 'error');
+                }
+            } catch (error) {
+                showNotification('Error loading transcript', 'error');
+            }
+        }
+
+        // Load segments with timestamps
+        async function loadSegments() {
+            try {
+                const response = await fetch(`/api/segments/${jobId}`);
+                const data = await response.json();
+
+                if (response.ok && data.segments) {
+                    segments = data.segments;
+                    renderSegments();
+                } else {
+                    transcriptView.innerHTML = '<p style="color: #ef4444;">Failed to load segments. Switch to Edit mode to view transcript.</p>';
+                }
+            } catch (error) {
+                transcriptView.innerHTML = '<p style="color: #ef4444;">Error loading segments. Switch to Edit mode to view transcript.</p>';
+            }
+        }
+
+        // Normalize text for comparison (remove extra whitespace, punctuation variations)
+        function normalizeText(text) {
+            return text.toLowerCase()
+                .replace(/\s+/g, ' ')
+                .replace(/['']/g, "'")
+                .replace(/[""]/g, '"')
+                .trim();
+        }
+
+        // Check if a segment has been edited
+        function isSegmentEdited(segment) {
+            // Only detect edits if user has manually edited the transcript (backup exists)
+            if (!hasManualEdits || !originalBackupText) {
+                return false;
+            }
+
+            const normalizedSegment = normalizeText(segment.text);
+            const normalizedOriginal = normalizeText(originalBackupText);
+            const normalizedCurrent = normalizeText(editedText);
+
+            // Segment is edited if it exists in original but not in current
+            const inOriginal = normalizedOriginal.includes(normalizedSegment);
+            const inCurrent = normalizedCurrent.includes(normalizedSegment);
+
+            return inOriginal && !inCurrent;
+        }
+
+        // Render segments in view mode
+        function renderSegments() {
+            if (segments.length === 0) {
+                transcriptView.innerHTML = '<p>No segments available.</p>';
+                return;
+            }
+
+            transcriptView.innerHTML = '';
+            segments.forEach((segment, index) => {
+                const span = document.createElement('span');
+                const isEdited = isSegmentEdited(segment);
+
+                span.className = isEdited ? 'segment edited' : 'segment';
+                span.textContent = segment.text;
+                span.dataset.index = index;
+                span.dataset.start = segment.start;
+                span.dataset.end = segment.end;
+
+                // Only add click handler for unedited segments
+                if (!isEdited) {
+                    span.addEventListener('click', () => {
+                        audioPlayer.currentTime = segment.start;
+                        if (audioPlayer.paused) {
+                            audioPlayer.play();
+                            playPauseBtn.textContent = '⏸️ Pause';
+                        }
+                    });
+                } else {
+                    span.title = 'This segment has been edited and cannot be synced with audio';
+                }
+
+                transcriptView.appendChild(span);
+                transcriptView.appendChild(document.createTextNode(' '));
+            });
+        }
+
+        // Update active segment based on current time
+        function updateActiveSegment() {
+            if (segments.length === 0) return;
+
+            const currentTime = audioPlayer.currentTime;
+            let newIndex = -1;
+
+            // Find the segment that contains the current time
+            for (let i = 0; i < segments.length; i++) {
+                if (currentTime >= segments[i].start && currentTime <= segments[i].end) {
+                    newIndex = i;
+                    break;
+                }
+            }
+
+            // Update highlighting if segment changed
+            if (newIndex !== currentSegmentIndex) {
+                // Remove previous highlight
+                if (currentSegmentIndex >= 0) {
+                    const prevSegment = transcriptView.querySelector(`[data-index="${currentSegmentIndex}"]`);
+                    if (prevSegment) {
+                        prevSegment.classList.remove('active');
+                    }
+                }
+
+                // Add new highlight
+                currentSegmentIndex = newIndex;
+                if (currentSegmentIndex >= 0) {
+                    const currentSegment = transcriptView.querySelector(`[data-index="${currentSegmentIndex}"]`);
+                    if (currentSegment) {
+                        currentSegment.classList.add('active');
+
+                        // Auto-scroll to keep active segment visible
+                        const container = transcriptView;
+                        const segmentTop = currentSegment.offsetTop;
+                        const segmentBottom = segmentTop + currentSegment.offsetHeight;
+                        const containerTop = container.scrollTop;
+                        const containerBottom = containerTop + container.clientHeight;
+
+                        if (segmentTop < containerTop || segmentBottom > containerBottom) {
+                            currentSegment.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Mode switching
+        function switchToViewMode() {
+            viewModeBtn.classList.add('active');
+            editModeBtn.classList.remove('active');
+            viewContainer.classList.add('active');
+            editorContainer.classList.remove('active');
+
+            // Load segments if not already loaded, or reload to reflect edits
+            if (segments.length === 0) {
+                loadSegments();
+            } else {
+                // Update editedText and re-render in case edits were made
+                editedText = transcriptEditor.value;
+                renderSegments();
+            }
+        }
+
+        function switchToEditMode() {
+            editModeBtn.classList.add('active');
+            viewModeBtn.classList.remove('active');
+            editorContainer.classList.add('active');
+            viewContainer.classList.remove('active');
+        }
+
+        viewModeBtn.addEventListener('click', switchToViewMode);
+        editModeBtn.addEventListener('click', switchToEditMode);
+
+        // Save transcript
+        async function saveTranscript() {
+            try {
+                saveBtn.disabled = true;
+                saveBtn.textContent = '💾 Saving...';
+
+                const response = await fetch(`/api/transcript/${jobId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content: transcriptEditor.value })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    originalContent = transcriptEditor.value;
+                    updateStatus(true);
+                    showNotification('Transcript saved successfully!');
+
+                    // Reload segments to reflect changes in View mode
+                    editedText = transcriptEditor.value;
+                    if (segments.length > 0) {
+                        renderSegments();
+                    }
+                } else {
+                    showNotification('Failed to save: ' + data.error, 'error');
+                }
+            } catch (error) {
+                showNotification('Error saving transcript', 'error');
+            } finally {
+                saveBtn.disabled = false;
+                saveBtn.textContent = '💾 Save';
+            }
+        }
+
+        // Reload transcript
+        async function reloadTranscript() {
+            if (!isSaved) {
+                if (!confirm('You have unsaved changes. Are you sure you want to reload?')) {
+                    return;
+                }
+            }
+
+            try {
+                reloadBtn.disabled = true;
+                reloadBtn.textContent = '🔄 Reloading...';
+
+                const response = await fetch(`/api/transcript/${jobId}/reload`, {
+                    method: 'POST'
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    transcriptEditor.value = data.content;
+                    originalContent = data.content;
+                    updateStatus(true);
+                    showNotification('Transcript reloaded from backup');
+                } else {
+                    showNotification('Failed to reload: ' + data.error, 'error');
+                }
+            } catch (error) {
+                showNotification('Error reloading transcript', 'error');
+            } finally {
+                reloadBtn.disabled = false;
+                reloadBtn.textContent = '🔄 Reload';
+            }
+        }
+
+        // Download transcript
+        function downloadTranscript() {
+            const blob = new Blob([transcriptEditor.value], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `{{ job.filename }}_edited.txt`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            showNotification('Transcript downloaded');
+        }
+
+        // Regenerate cleaned transcript and summary
+        async function regenerateCleanedTranscript() {
+            if (!isSaved) {
+                if (!confirm('You have unsaved changes. Please save first before regenerating.')) {
+                    return;
+                }
+                return;
+            }
+
+            if (!confirm('This will regenerate the cleaned transcript and summary from your current transcript. This may take a few minutes. Continue?')) {
+                return;
+            }
+
+            try {
+                regenerateBtn.disabled = true;
+                regenerateBtn.textContent = '🤖 Regenerating...';
+
+                const response = await fetch(`/api/transcript/${jobId}/regenerate`, {
+                    method: 'POST'
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    showNotification('Regeneration started! This will take a few minutes. The page will refresh when complete.');
+
+                    // Poll for completion (check every 5 seconds)
+                    const pollInterval = setInterval(async () => {
+                        try {
+                            const statusResponse = await fetch(`/status/${jobId}`);
+                            const statusData = await statusResponse.json();
+
+                            if (statusData.message && statusData.message.includes('complete')) {
+                                clearInterval(pollInterval);
+                                showNotification('Regeneration complete! Reloading page...');
+                                setTimeout(() => {
+                                    location.reload();
+                                }, 2000);
+                            }
+                        } catch (error) {
+                            console.error('Error polling status:', error);
+                        }
+                    }, 5000);
+
+                    // Timeout after 10 minutes
+                    setTimeout(() => {
+                        clearInterval(pollInterval);
+                        regenerateBtn.disabled = false;
+                        regenerateBtn.textContent = '🤖 Regenerate Clean Version';
+                        showNotification('Regeneration is taking longer than expected. Please refresh the page to check status.', 'error');
+                    }, 600000);
+                } else {
+                    showNotification('Failed to regenerate: ' + data.error, 'error');
+                    regenerateBtn.disabled = false;
+                    regenerateBtn.textContent = '🤖 Regenerate Clean Version';
+                }
+            } catch (error) {
+                showNotification('Error regenerating transcript', 'error');
+                regenerateBtn.disabled = false;
+                regenerateBtn.textContent = '🤖 Regenerate Clean Version';
+            }
+        }
+
+        // Audio player controls
+        playPauseBtn.addEventListener('click', () => {
+            if (audioPlayer.paused) {
+                audioPlayer.play();
+                playPauseBtn.textContent = '⏸️ Pause';
+            } else {
+                audioPlayer.pause();
+                playPauseBtn.textContent = '▶️ Play';
+            }
+        });
+
+        skipBackBtn.addEventListener('click', () => {
+            audioPlayer.currentTime = Math.max(0, audioPlayer.currentTime - 10);
+        });
+
+        skipForwardBtn.addEventListener('click', () => {
+            audioPlayer.currentTime = Math.min(audioPlayer.duration, audioPlayer.currentTime + 10);
+        });
+
+        // Update seek bar and time display
+        audioPlayer.addEventListener('timeupdate', () => {
+            const progress = (audioPlayer.currentTime / audioPlayer.duration) * 100;
+            seekBar.value = progress || 0;
+            currentTimeEl.textContent = formatTime(audioPlayer.currentTime);
+
+            // Update active segment highlighting
+            updateActiveSegment();
+        });
+
+        audioPlayer.addEventListener('loadedmetadata', () => {
+            durationEl.textContent = formatTime(audioPlayer.duration);
+        });
+
+        seekBar.addEventListener('input', (e) => {
+            const time = (e.target.value / 100) * audioPlayer.duration;
+            audioPlayer.currentTime = time;
+        });
+
+        // Transcript editor events
+        transcriptEditor.addEventListener('input', () => {
+            updateStatus(false);
+        });
+
+        saveBtn.addEventListener('click', saveTranscript);
+        reloadBtn.addEventListener('click', reloadTranscript);
+        downloadBtn.addEventListener('click', downloadTranscript);
+        regenerateBtn.addEventListener('click', regenerateCleanedTranscript);
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            // Ctrl+S to save
+            if (e.ctrlKey && e.key === 's') {
+                e.preventDefault();
+                saveTranscript();
+            }
+
+            // Space to play/pause (only if not focused on textarea)
+            if (e.code === 'Space' && document.activeElement !== transcriptEditor) {
+                e.preventDefault();
+                playPauseBtn.click();
+            }
+
+            // Left arrow to skip back
+            if (e.key === 'ArrowLeft' && document.activeElement !== transcriptEditor) {
+                e.preventDefault();
+                skipBackBtn.click();
+            }
+
+            // Right arrow to skip forward
+            if (e.key === 'ArrowRight' && document.activeElement !== transcriptEditor) {
+                e.preventDefault();
+                skipForwardBtn.click();
+            }
+        });
+
+        // Warn before leaving with unsaved changes
+        window.addEventListener('beforeunload', (e) => {
+            if (!isSaved) {
+                e.preventDefault();
+                e.returnValue = '';
+            }
+        });
+
+        // Load transcript and segments on page load
+        loadTranscript();
+        loadSegments();
+    </script>
+</body>
+</html>
