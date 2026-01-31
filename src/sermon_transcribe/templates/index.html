@@ -319,6 +319,32 @@
             font-size: 12px;
         }
 
+        .retranscribe-btn {
+            background: #2563eb;
+            color: white;
+            padding: 8px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-top: 10px;
+            margin-right: 10px;
+        }
+
+        .retranscribe-btn:hover {
+            background: #1d4ed8;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(37, 99, 235, 0.4);
+        }
+
+        .job.compact .retranscribe-btn {
+            padding: 5px 12px;
+            font-size: 12px;
+            margin-top: 5px;
+        }
+
         .delete-btn {
             background: #ef4444;
             color: white;
@@ -674,6 +700,116 @@
             </label>
         </div>
 
+        <div class="cleanup-option">
+            <label for="languageSelect" style="display: block; margin-bottom: 8px;">
+                <strong>Transcription Language</strong>
+                <br>
+                <span style="font-size: 14px; color: #666;">Select language for accurate transcription (defaults to English)</span>
+            </label>
+            <select id="languageSelect" style="padding: 8px; border-radius: 4px; border: 1px solid #ccc; width: 100%; max-width: 300px; font-size: 14px;">
+                <option value="en" selected>English</option>
+                <option value="auto">Auto-detect</option>
+                <option value="zh">Chinese</option>
+                <option value="de">German</option>
+                <option value="es">Spanish</option>
+                <option value="ru">Russian</option>
+                <option value="ko">Korean</option>
+                <option value="fr">French</option>
+                <option value="ja">Japanese</option>
+                <option value="pt">Portuguese</option>
+                <option value="tr">Turkish</option>
+                <option value="pl">Polish</option>
+                <option value="ca">Catalan</option>
+                <option value="nl">Dutch</option>
+                <option value="ar">Arabic</option>
+                <option value="sv">Swedish</option>
+                <option value="it">Italian</option>
+                <option value="id">Indonesian</option>
+                <option value="hi">Hindi</option>
+                <option value="fi">Finnish</option>
+                <option value="vi">Vietnamese</option>
+                <option value="he">Hebrew</option>
+                <option value="uk">Ukrainian</option>
+                <option value="el">Greek</option>
+                <option value="ms">Malay</option>
+                <option value="cs">Czech</option>
+                <option value="ro">Romanian</option>
+                <option value="da">Danish</option>
+                <option value="hu">Hungarian</option>
+                <option value="ta">Tamil</option>
+                <option value="no">Norwegian</option>
+                <option value="th">Thai</option>
+                <option value="ur">Urdu</option>
+                <option value="hr">Croatian</option>
+                <option value="bg">Bulgarian</option>
+                <option value="lt">Lithuanian</option>
+                <option value="la">Latin</option>
+                <option value="mi">Maori</option>
+                <option value="ml">Malayalam</option>
+                <option value="cy">Welsh</option>
+                <option value="sk">Slovak</option>
+                <option value="te">Telugu</option>
+                <option value="fa">Persian</option>
+                <option value="lv">Latvian</option>
+                <option value="bn">Bengali</option>
+                <option value="sr">Serbian</option>
+                <option value="az">Azerbaijani</option>
+                <option value="sl">Slovenian</option>
+                <option value="kn">Kannada</option>
+                <option value="et">Estonian</option>
+                <option value="mk">Macedonian</option>
+                <option value="br">Breton</option>
+                <option value="eu">Basque</option>
+                <option value="is">Icelandic</option>
+                <option value="hy">Armenian</option>
+                <option value="ne">Nepali</option>
+                <option value="mn">Mongolian</option>
+                <option value="bs">Bosnian</option>
+                <option value="kk">Kazakh</option>
+                <option value="sq">Albanian</option>
+                <option value="sw">Swahili</option>
+                <option value="gl">Galician</option>
+                <option value="mr">Marathi</option>
+                <option value="pa">Punjabi</option>
+                <option value="si">Sinhala</option>
+                <option value="km">Khmer</option>
+                <option value="sn">Shona</option>
+                <option value="yo">Yoruba</option>
+                <option value="so">Somali</option>
+                <option value="af">Afrikaans</option>
+                <option value="oc">Occitan</option>
+                <option value="ka">Georgian</option>
+                <option value="be">Belarusian</option>
+                <option value="tg">Tajik</option>
+                <option value="sd">Sindhi</option>
+                <option value="gu">Gujarati</option>
+                <option value="am">Amharic</option>
+                <option value="yi">Yiddish</option>
+                <option value="lo">Lao</option>
+                <option value="uz">Uzbek</option>
+                <option value="fo">Faroese</option>
+                <option value="ht">Haitian Creole</option>
+                <option value="ps">Pashto</option>
+                <option value="tk">Turkmen</option>
+                <option value="nn">Nynorsk</option>
+                <option value="mt">Maltese</option>
+                <option value="sa">Sanskrit</option>
+                <option value="lb">Luxembourgish</option>
+                <option value="my">Myanmar</option>
+                <option value="bo">Tibetan</option>
+                <option value="tl">Tagalog</option>
+                <option value="mg">Malagasy</option>
+                <option value="as">Assamese</option>
+                <option value="tt">Tatar</option>
+                <option value="haw">Hawaiian</option>
+                <option value="ln">Lingala</option>
+                <option value="ha">Hausa</option>
+                <option value="ba">Bashkir</option>
+                <option value="jw">Javanese</option>
+                <option value="su">Sundanese</option>
+            </select>
+        </div>
+
         <div id="audioConversionOptions" class="cleanup-option" style="display: block;">
             <div style="margin-bottom: 10px;">
                 <strong style="color: #333;">Audio Conversion Options</strong>
@@ -741,6 +877,7 @@
         const audioConversionOptions = document.getElementById('audioConversionOptions');
         const convertM4aCheckbox = document.getElementById('convertM4aCheckbox');
         const convertFlacCheckbox = document.getElementById('convertFlacCheckbox');
+        const languageSelect = document.getElementById('languageSelect');
 
         let selectedFiles = [];
         let jobs = {};
@@ -996,6 +1133,7 @@
             if (uploadMode === 'audio') {
                 formData.append('convert_m4a', convertM4aCheckbox.checked);
                 formData.append('convert_flac', convertFlacCheckbox.checked);
+                formData.append('language', languageSelect.value);
             }
 
             const xhr = new XMLHttpRequest();
@@ -1141,12 +1279,14 @@
                         ${job.flac_url ? `<a href="${job.flac_url}" download>🎵 FLAC</a>` : ''}
                     </div>
                     <div class="job-actions">
+                        <button class="retranscribe-btn" data-job-id="${job.job_id}">🔄 Re-transcribe</button>
                         <button class="delete-btn" data-job-id="${job.job_id}">🗑️ Delete</button>
                     </div>
                 `;
             } else if (job.status === 'failed') {
                 jobActions = `
                     <div class="job-actions">
+                        <button class="retranscribe-btn" data-job-id="${job.job_id}">🔄 Re-transcribe</button>
                         <button class="delete-btn" data-job-id="${job.job_id}">🗑️ Delete</button>
                     </div>
                 `;
@@ -1262,6 +1402,12 @@
                 const jobId = btn.dataset.jobId;
                 deleteJob(jobId);
             }
+
+            if (e.target.classList.contains('retranscribe-btn') || e.target.closest('.retranscribe-btn')) {
+                const btn = e.target.classList.contains('retranscribe-btn') ? e.target : e.target.closest('.retranscribe-btn');
+                const jobId = btn.dataset.jobId;
+                retranscribeJob(jobId);
+            }
         });
 
         // Delete job function
@@ -1293,6 +1439,110 @@
             } catch (error) {
                 alert('Error deleting job: ' + error.message);
             }
+        }
+
+        // Re-transcribe job function
+        async function retranscribeJob(jobId) {
+            const job = jobs[jobId];
+            if (!job) return;
+
+            // Create a modal/prompt for re-transcribe options
+            const currentLanguage = job.language || 'en';
+            const languageOptions = {
+                'en': 'English',
+                'auto': 'Auto-detect',
+                'zh': 'Chinese',
+                'de': 'German',
+                'es': 'Spanish',
+                'fr': 'French',
+                'ja': 'Japanese',
+                'pt': 'Portuguese',
+                'it': 'Italian',
+                'ru': 'Russian',
+                'ar': 'Arabic',
+                'hi': 'Hindi',
+                'ko': 'Korean',
+                'nl': 'Dutch',
+                'sv': 'Swedish',
+                'cy': 'Welsh'
+            };
+
+            let languageSelectHTML = '<select id="retranscribeLanguage" style="width: 100%; padding: 8px; margin: 10px 0; border-radius: 4px; border: 1px solid #ccc;">';
+            for (const [code, name] of Object.entries(languageOptions)) {
+                const selected = code === currentLanguage ? 'selected' : '';
+                languageSelectHTML += `<option value="${code}" ${selected}>${name}</option>`;
+            }
+            languageSelectHTML += '</select>';
+
+            const modalHTML = `
+                <div style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 10000;">
+                    <div style="background: white; padding: 30px; border-radius: 12px; max-width: 500px; width: 90%;">
+                        <h3 style="margin-top: 0;">Re-transcribe "${job.filename}"</h3>
+                        <p style="color: #666; margin-bottom: 20px;">Choose language and options for re-transcription:</p>
+                        <label style="display: block; font-weight: bold; margin-bottom: 5px;">Language:</label>
+                        ${languageSelectHTML}
+                        <label style="display: flex; align-items: center; margin: 15px 0; cursor: pointer;">
+                            <input type="checkbox" id="retranscribeCleanup" ${job.cleanup ? 'checked' : ''} style="margin-right: 8px;">
+                            Clean and summarize with AI
+                        </label>
+                        <div style="display: flex; gap: 10px; margin-top: 20px; justify-content: flex-end;">
+                            <button id="retranscribeCancelBtn" style="padding: 10px 20px; border: 1px solid #ccc; background: white; color: #333; border-radius: 6px; cursor: pointer;">Cancel</button>
+                            <button id="retranscribeConfirmBtn" style="padding: 10px 20px; border: none; background: #2563eb; color: white; border-radius: 6px; cursor: pointer;">Start Re-transcription</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            const modalEl = document.createElement('div');
+            modalEl.innerHTML = modalHTML;
+            document.body.appendChild(modalEl);
+
+            const cancelBtn = modalEl.querySelector('#retranscribeCancelBtn');
+            const confirmBtn = modalEl.querySelector('#retranscribeConfirmBtn');
+            const languageSelect = modalEl.querySelector('#retranscribeLanguage');
+            const cleanupCheckbox = modalEl.querySelector('#retranscribeCleanup');
+
+            cancelBtn.addEventListener('click', () => {
+                document.body.removeChild(modalEl);
+            });
+
+            confirmBtn.addEventListener('click', async () => {
+                const selectedLanguage = languageSelect.value;
+                const doCleanup = cleanupCheckbox.checked;
+
+                document.body.removeChild(modalEl);
+
+                try {
+                    const response = await fetch(`/api/retranscribe/${jobId}`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            language: selectedLanguage === 'auto' ? null : selectedLanguage,
+                            cleanup: doCleanup
+                        })
+                    });
+
+                    const data = await response.json();
+
+                    if (response.ok) {
+                        // Update existing job status (re-transcribe updates the same job)
+                        jobs[data.job_id] = {
+                            ...jobs[data.job_id],
+                            status: 'queued',
+                            progress: 0,
+                            message: data.message
+                        };
+                        renderJobs();
+                        showSimpleNotification('✅ Re-transcription started - updating existing job', 'success');
+                    } else {
+                        alert('Failed to start re-transcription: ' + data.error);
+                    }
+                } catch (error) {
+                    alert('Error starting re-transcription: ' + error.message);
+                }
+            });
         }
 
         // Simple notification function

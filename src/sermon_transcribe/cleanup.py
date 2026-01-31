@@ -249,6 +249,8 @@ def build_prompt(chunk: str) -> str:
         "- Insert paragraph breaks and sentence punctuation where it is obviously missing.\n"
         "- Fix obvious grammar and spelling mistakes.\n"
         "- Keep wording, tone, and meaning as close to the original as possible.\n"
+        "- IMPORTANT: Do not remove or omit any content. Keep all the text, even if repetitive.\n"
+        "- Only remove extreme filler words like 'um', 'uh', 'you know' if excessive.\n"
         "- Do not add commentary or labels. Return only the cleaned text.\n\n"
         f"Transcript:\n{chunk.strip()}"
     )

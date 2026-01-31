@@ -487,6 +487,7 @@
                     <button class="action-btn reload" id="reloadBtn">🔄 Reload</button>
                     <button class="action-btn download" id="downloadBtn">📥 Download</button>
                     <button class="action-btn" id="regenerateBtn" style="background: #f59e0b;">🤖 Regenerate Clean Version</button>
+                    <button class="action-btn" id="retranscribeBtn" style="background: #2563eb;">🔄 Re-transcribe Audio</button>
                 </div>
             </div>
 
@@ -521,6 +522,7 @@
         const reloadBtn = document.getElementById('reloadBtn');
         const downloadBtn = document.getElementById('downloadBtn');
         const regenerateBtn = document.getElementById('regenerateBtn');
+        const retranscribeBtn = document.getElementById('retranscribeBtn');
         const statusDot = document.getElementById('statusDot');
         const statusText = document.getElementById('statusText');
         const notification = document.getElementById('notification');
@@ -929,6 +931,102 @@
         reloadBtn.addEventListener('click', reloadTranscript);
         downloadBtn.addEventListener('click', downloadTranscript);
         regenerateBtn.addEventListener('click', regenerateCleanedTranscript);
+        retranscribeBtn.addEventListener('click', retranscribeAudio);
+
+        // Re-transcribe audio function
+        async function retranscribeAudio() {
+            const languageOptions = {
+                'en': 'English',
+                'auto': 'Auto-detect',
+                'zh': 'Chinese',
+                'de': 'German',
+                'es': 'Spanish',
+                'fr': 'French',
+                'ja': 'Japanese',
+                'pt': 'Portuguese',
+                'it': 'Italian',
+                'ru': 'Russian',
+                'ar': 'Arabic',
+                'hi': 'Hindi',
+                'ko': 'Korean',
+                'nl': 'Dutch',
+                'sv': 'Swedish',
+                'cy': 'Welsh'
+            };
+
+            let languageSelectHTML = '<select id="retranscribeLanguage" style="width: 100%; padding: 8px; margin: 10px 0; border-radius: 4px; border: 1px solid #ccc;">';
+            for (const [code, name] of Object.entries(languageOptions)) {
+                const selected = code === 'en' ? 'selected' : '';
+                languageSelectHTML += `<option value="${code}" ${selected}>${name}</option>`;
+            }
+            languageSelectHTML += '</select>';
+
+            const modalHTML = `
+                <div style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 10000;">
+                    <div style="background: white; padding: 30px; border-radius: 12px; max-width: 500px; width: 90%;">
+                        <h3 style="margin-top: 0;">Re-transcribe Audio</h3>
+                        <p style="color: #666; margin-bottom: 20px;">Choose language and options for re-transcription. This will create a new transcription job.</p>
+                        <label style="display: block; font-weight: bold; margin-bottom: 5px;">Language:</label>
+                        ${languageSelectHTML}
+                        <label style="display: flex; align-items: center; margin: 15px 0; cursor: pointer;">
+                            <input type="checkbox" id="retranscribeCleanup" checked style="margin-right: 8px;">
+                            Clean and summarize with AI
+                        </label>
+                        <div style="display: flex; gap: 10px; margin-top: 20px; justify-content: flex-end;">
+                            <button id="retranscribeCancelBtn" style="padding: 10px 20px; border: 1px solid #ccc; background: white; border-radius: 6px; cursor: pointer;">Cancel</button>
+                            <button id="retranscribeConfirmBtn" style="padding: 10px 20px; border: none; background: #2563eb; color: white; border-radius: 6px; cursor: pointer;">Start Re-transcription</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            const modalEl = document.createElement('div');
+            modalEl.innerHTML = modalHTML;
+            document.body.appendChild(modalEl);
+
+            const cancelBtn = modalEl.querySelector('#retranscribeCancelBtn');
+            const confirmBtn = modalEl.querySelector('#retranscribeConfirmBtn');
+            const languageSelect = modalEl.querySelector('#retranscribeLanguage');
+            const cleanupCheckbox = modalEl.querySelector('#retranscribeCleanup');
+
+            cancelBtn.addEventListener('click', () => {
+                document.body.removeChild(modalEl);
+            });
+
+            confirmBtn.addEventListener('click', async () => {
+                const selectedLanguage = languageSelect.value;
+                const doCleanup = cleanupCheckbox.checked;
+
+                document.body.removeChild(modalEl);
+
+                try {
+                    const response = await fetch(`/api/retranscribe/${jobId}`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            language: selectedLanguage === 'auto' ? null : selectedLanguage,
+                            cleanup: doCleanup
+                        })
+                    });
+
+                    const data = await response.json();
+
+                    if (response.ok) {
+                        showNotification(`✅ Re-transcription started! Page will reload when complete...`, 'success');
+                        // Reload the page after a short delay to show the updated transcription
+                        setTimeout(() => {
+                            window.location.reload();
+                        }, 2000);
+                    } else {
+                        showNotification(`❌ Failed to start re-transcription: ${data.error}`, 'error');
+                    }
+                } catch (error) {
+                    showNotification(`❌ Error starting re-transcription: ${error.message}`, 'error');
+                }
+            });
+        }
 
         // Keyboard shortcuts
         document.addEventListener('keydown', (e) => {

@@ -66,12 +66,18 @@ def init_model():
     compute_type = os.environ.get("WHISPER_COMPUTE_TYPE")
     hf_token = os.environ.get("HF_TOKEN")
 
+    # Get default language from environment (defaults to "en" for English)
+    default_language = os.environ.get("WHISPER_LANGUAGE", "en")
+    # Convert empty string or "auto" to None for auto-detection
+    if default_language in ("", "auto", "none", "None"):
+        default_language = None
+
     config = build_config(
         model=model_name,
         device=device,
         compute_type=compute_type,
         beam_size=5,
-        language=None,
+        language=default_language,
         task="transcribe",
         vad_filter=True,
         cache_dir=app.config["MODEL_CACHE"],
@@ -258,7 +264,7 @@ def convert_audio(job_id: str, audio_path: Path, output_dir: Path, convert_m4a: 
     return results
 
 
-def process_transcription(job_id: str, audio_path: Path, output_dir: Path, do_cleanup: bool, convert_m4a: bool = False, convert_flac: bool = False):
+def process_transcription(job_id: str, audio_path: Path, output_dir: Path, do_cleanup: bool, convert_m4a: bool = False, convert_flac: bool = False, language: Optional[str] = None):
     """Background task for transcribing audio."""
     # Small delay to ensure client receives upload response before WebSocket updates
     time.sleep(0.2)
@@ -271,11 +277,27 @@ def process_transcription(job_id: str, audio_path: Path, output_dir: Path, do_cl
             emit_progress(job_id, "processing", 10, "Starting transcription...")
             emit_progress(job_id, "processing", 15, "Transcribing audio... (this may take several minutes)")
 
+            # Create a config with the specified language (or use default)
+            transcription_config = config
+            if language is not None and language != config.language:
+                from sermon_transcribe.transcription import build_config
+                transcription_config = build_config(
+                    model=config.model,
+                    device=config.device,
+                    compute_type=config.compute_type,
+                    beam_size=config.beam_size,
+                    language=language,
+                    task=config.task,
+                    vad_filter=config.vad_filter,
+                    cache_dir=config.cache_dir,
+                    hf_token=config.hf_token,
+                )
+
             result = transcribe_file(
                 model=model,
                 source_path=audio_path,
                 output_dir=output_dir,
-                config=config,
+                config=transcription_config,
                 convert_flac=False,
                 raw_suffix="_raw" if do_cleanup else "",
             )
@@ -340,17 +362,36 @@ def cleanup_transcript(job_id: str, result: TranscriptionResult, output_dir: Pat
     for idx, chunk in enumerate(chunks, start=1):
         emit_progress(job_id, "processing", 65 + (idx * 10 // len(chunks)), f"Cleaning chunk {idx}/{len(chunks)}")
         prompt = build_prompt(chunk)
-        cleaned = call_claude(
-            prompt=prompt,
-            api_key=api_key,
-            model=model_name,
-            max_tokens=1200,
-            temperature=0.1,
-            timeout=120,
-        )
-        cleaned_chunks.append(cleaned.strip())
+        try:
+            cleaned = call_claude(
+                prompt=prompt,
+                api_key=api_key,
+                model=model_name,
+                max_tokens=4000,  # Increased from 1200 to prevent truncation
+                temperature=0.1,
+                timeout=120,
+            )
+            cleaned_text_chunk = cleaned.strip()
 
+            # Warn if chunk came back empty but original wasn't
+            if not cleaned_text_chunk and chunk.strip():
+                print(f"WARNING: Chunk {idx}/{len(chunks)} returned empty from Claude (original had {len(chunk)} chars)", flush=True)
+                # Keep original chunk if Claude returns nothing
+                cleaned_chunks.append(chunk.strip())
+            else:
+                cleaned_chunks.append(cleaned_text_chunk)
+        except Exception as e:
+            print(f"ERROR: Chunk {idx}/{len(chunks)} failed to clean: {str(e)}", flush=True)
+            # Fall back to original chunk on error
+            cleaned_chunks.append(chunk.strip())
+
+    # Join all chunks, but verify we haven't lost content
     cleaned_text = "\n\n".join(chunk for chunk in cleaned_chunks if chunk)
+
+    # Log if we lost chunks
+    non_empty_chunks = sum(1 for c in cleaned_chunks if c)
+    if non_empty_chunks < len(chunks):
+        print(f"WARNING: Lost {len(chunks) - non_empty_chunks} chunks during cleaning", flush=True)
     base_name = result.audio_path.stem
     cleaned_path = output_dir / f"{base_name}.txt"
     cleaned_path.write_text(apply_disclaimer(cleaned_text), encoding="utf-8")
@@ -690,6 +731,11 @@ def upload():
     convert_m4a = request.form.get("convert_m4a", "false").lower() == "true"
     convert_flac = request.form.get("convert_flac", "false").lower() == "true"
 
+    # Get language parameter (defaults to environment setting, which defaults to "en")
+    language = request.form.get("language", "")
+    if language in ("", "auto", "none"):
+        language = None  # Auto-detect
+
     # Generate job ID
     job_id = secrets.token_hex(16)
 
@@ -717,17 +763,81 @@ def upload():
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat(),
             "cleanup": do_cleanup,
+            "language": language or config.language,  # Store language used
         }
 
     # Start background processing
     thread = threading.Thread(
         target=process_transcription,
-        args=(job_id, audio_path, output_dir, do_cleanup, convert_m4a, convert_flac),
+        args=(job_id, audio_path, output_dir, do_cleanup, convert_m4a, convert_flac, language),
         daemon=True,
     )
     thread.start()
 
     return jsonify({"job_id": job_id, "status": "queued"})
+
+
+@app.route("/api/retranscribe/<job_id>", methods=["POST"])
+def retranscribe(job_id: str):
+    """Re-transcribe an existing job with optional new language setting."""
+    with jobs_lock:
+        if job_id not in jobs:
+            return jsonify({"error": "Job not found"}), 404
+
+        old_job = jobs[job_id].copy()
+
+    # Get options from request
+    data = request.get_json() or {}
+    do_cleanup = data.get("cleanup", old_job.get("cleanup", False))
+    language = data.get("language", old_job.get("language"))
+
+    # Convert empty string or "auto" to None
+    if language in ("", "auto", "none"):
+        language = None
+
+    # Find the original audio file
+    upload_path = app.config["UPLOAD_FOLDER"] / job_id
+    if not upload_path.exists():
+        return jsonify({"error": "Original audio file not found"}), 404
+
+    # Find audio file in upload directory
+    audio_files = list(upload_path.glob("*"))
+    if not audio_files:
+        return jsonify({"error": "Original audio file not found"}), 404
+
+    audio_path = audio_files[0]  # Use first file found
+
+    # Use existing output directory (preserves M4A/FLAC conversions)
+    output_dir = app.config["OUTPUT_FOLDER"] / job_id
+
+    # Preserve audio conversion URLs from old job
+    preserved_fields = {}
+    for key in ['m4a_url', 'flac_url', 'm4a_path', 'flac_path']:
+        if key in old_job:
+            preserved_fields[key] = old_job[key]
+
+    # Update existing job instead of creating new one
+    with jobs_lock:
+        jobs[job_id].update({
+            "status": "queued",
+            "progress": 0,
+            "message": "Re-transcription queued",
+            "updated_at": datetime.utcnow().isoformat(),
+            "cleanup": do_cleanup,
+            "language": language or config.language,
+        })
+        # Preserve audio conversions
+        jobs[job_id].update(preserved_fields)
+
+    # Start background processing (don't convert audio again - set to False)
+    thread = threading.Thread(
+        target=process_transcription,
+        args=(job_id, audio_path, output_dir, do_cleanup, False, False, language),
+        daemon=True,
+    )
+    thread.start()
+
+    return jsonify({"job_id": job_id, "status": "queued", "message": "Re-transcription started"})
 
 
 @app.route("/upload-transcript", methods=["POST"])
