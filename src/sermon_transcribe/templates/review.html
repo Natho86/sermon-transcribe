@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Review Transcript - {{ job.filename }}</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎙️</text></svg>">
     <style>
         * {
             margin: 0;
@@ -309,6 +310,15 @@
             }
         }
 
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.5;
+            }
+        }
+
         /* Segment highlighting styles */
         .transcript-view {
             background: white;
@@ -486,6 +496,7 @@
                     <button class="action-btn" id="saveBtn">💾 Save</button>
                     <button class="action-btn reload" id="reloadBtn">🔄 Reload</button>
                     <button class="action-btn download" id="downloadBtn">📥 Download</button>
+                    <button class="action-btn" id="downloadAllBtn" style="background: #2563eb; color: white;">📦 Download All</button>
                     <button class="action-btn" id="regenerateBtn" style="background: #f59e0b;">🤖 Regenerate Clean Version</button>
                     <button class="action-btn" id="retranscribeBtn" style="background: #2563eb;">🔄 Re-transcribe Audio</button>
                 </div>
@@ -521,6 +532,7 @@
         const saveBtn = document.getElementById('saveBtn');
         const reloadBtn = document.getElementById('reloadBtn');
         const downloadBtn = document.getElementById('downloadBtn');
+        const downloadAllBtn = document.getElementById('downloadAllBtn');
         const regenerateBtn = document.getElementById('regenerateBtn');
         const retranscribeBtn = document.getElementById('retranscribeBtn');
         const statusDot = document.getElementById('statusDot');
@@ -930,8 +942,67 @@
         saveBtn.addEventListener('click', saveTranscript);
         reloadBtn.addEventListener('click', reloadTranscript);
         downloadBtn.addEventListener('click', downloadTranscript);
+        downloadAllBtn.addEventListener('click', downloadAllFiles);
         regenerateBtn.addEventListener('click', regenerateCleanedTranscript);
         retranscribeBtn.addEventListener('click', retranscribeAudio);
+
+        // Download all files function
+        function downloadAllFiles() {
+            // Store original button content
+            const originalContent = downloadAllBtn.innerHTML;
+
+            // Show loading state
+            downloadAllBtn.innerHTML = '⏳ Preparing files...';
+            downloadAllBtn.disabled = true;
+            downloadAllBtn.style.opacity = '0.7';
+
+            // Create a loading notification
+            const loadingNotif = document.createElement('div');
+            loadingNotif.style.cssText = `
+                position: fixed;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                padding: 30px 40px;
+                background: white;
+                border: 2px solid #2563eb;
+                border-radius: 12px;
+                box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+                z-index: 10000;
+                color: #333;
+                font-weight: 600;
+                text-align: center;
+                min-width: 300px;
+            `;
+            loadingNotif.innerHTML = `
+                <div style="font-size: 48px; margin-bottom: 15px;">📦</div>
+                <div style="font-size: 18px; margin-bottom: 10px;">Preparing Download</div>
+                <div style="font-size: 14px; color: #666;">Creating zip file with all job files...</div>
+                <div style="margin-top: 15px;">
+                    <div style="width: 100%; height: 4px; background: #e5e7eb; border-radius: 2px; overflow: hidden;">
+                        <div style="width: 100%; height: 100%; background: #2563eb; animation: pulse 1.5s ease-in-out infinite;"></div>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(loadingNotif);
+
+            // Create a hidden link and trigger download
+            const link = document.createElement('a');
+            link.href = `/download/${jobId}/all`;
+            link.download = '';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+
+            // Wait a bit before removing notification to ensure download started
+            setTimeout(() => {
+                document.body.removeChild(loadingNotif);
+                downloadAllBtn.innerHTML = originalContent;
+                downloadAllBtn.disabled = false;
+                downloadAllBtn.style.opacity = '';
+                showNotification('✅ Download started successfully', 'success');
+            }, 2000);
+        }
 
         // Re-transcribe audio function
         async function retranscribeAudio() {

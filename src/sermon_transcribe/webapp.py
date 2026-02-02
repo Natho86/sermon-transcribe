@@ -48,6 +48,10 @@ socketio = SocketIO(
 jobs: Dict[str, dict] = {}
 jobs_lock = threading.Lock()
 
+# Cancelled jobs tracking
+cancelled_jobs = set()
+cancelled_lock = threading.Lock()
+
 # Processing semaphore - ensures only one transcription runs at a time
 processing_semaphore = threading.Semaphore(1)
 
@@ -120,7 +124,7 @@ def convert_audio(job_id: str, audio_path: Path, output_dir: Path, convert_m4a: 
     try:
         if convert_m4a:
             emit_progress(job_id, "processing", 51, "Converting to M4A (analyzing audio)...")
-            m4a_path = output_dir / f"{base_name}_mono_normalized.m4a"
+            m4a_path = output_dir / f"{base_name}.m4a"
 
             # Use two-pass loudnorm filter for accurate -20 LUFS normalization
             # First pass: analyze audio
@@ -192,7 +196,7 @@ def convert_audio(job_id: str, audio_path: Path, output_dir: Path, convert_m4a: 
 
         if convert_flac:
             emit_progress(job_id, "processing", 56, "Converting to FLAC (analyzing audio)...")
-            flac_path = output_dir / f"{base_name}_mono_normalized.flac"
+            flac_path = output_dir / f"{base_name}.flac"
 
             # Similar two-pass process for FLAC
             cmd_analyze = [
@@ -264,6 +268,12 @@ def convert_audio(job_id: str, audio_path: Path, output_dir: Path, convert_m4a: 
     return results
 
 
+def is_job_cancelled(job_id: str) -> bool:
+    """Check if a job has been cancelled."""
+    with cancelled_lock:
+        return job_id in cancelled_jobs
+
+
 def process_transcription(job_id: str, audio_path: Path, output_dir: Path, do_cleanup: bool, convert_m4a: bool = False, convert_flac: bool = False, language: Optional[str] = None):
     """Background task for transcribing audio."""
     # Small delay to ensure client receives upload response before WebSocket updates
@@ -274,6 +284,11 @@ def process_transcription(job_id: str, audio_path: Path, output_dir: Path, do_cl
 
     with processing_semaphore:
         try:
+            # Check for cancellation before starting
+            if is_job_cancelled(job_id):
+                emit_progress(job_id, "cancelled", 0, "Job cancelled by user")
+                return
+
             emit_progress(job_id, "processing", 10, "Starting transcription...")
             emit_progress(job_id, "processing", 15, "Transcribing audio... (this may take several minutes)")
 
@@ -299,8 +314,13 @@ def process_transcription(job_id: str, audio_path: Path, output_dir: Path, do_cl
                 output_dir=output_dir,
                 config=transcription_config,
                 convert_flac=False,
-                raw_suffix="_raw" if do_cleanup else "",
+                raw_suffix="_timestamps" if do_cleanup else "",
             )
+
+            # Check for cancellation after transcription
+            if is_job_cancelled(job_id):
+                emit_progress(job_id, "cancelled", 0, "Job cancelled by user")
+                return
 
             emit_progress(job_id, "processing", 50, "Transcription complete")
 
@@ -312,6 +332,10 @@ def process_transcription(job_id: str, audio_path: Path, output_dir: Path, do_cl
             # Perform audio conversion if requested
             conversion_results = {}
             if convert_m4a or convert_flac:
+                # Check for cancellation before conversion
+                if is_job_cancelled(job_id):
+                    emit_progress(job_id, "cancelled", 0, "Job cancelled by user")
+                    return
                 conversion_results = convert_audio(job_id, audio_path, output_dir, convert_m4a, convert_flac)
 
             # Add conversion results to job
@@ -319,8 +343,17 @@ def process_transcription(job_id: str, audio_path: Path, output_dir: Path, do_cl
                 jobs[job_id].update(conversion_results)
 
             if do_cleanup:
+                # Check for cancellation before cleanup
+                if is_job_cancelled(job_id):
+                    emit_progress(job_id, "cancelled", 0, "Job cancelled by user")
+                    return
                 emit_progress(job_id, "processing", 60, "Cleaning transcript with Claude...")
                 cleanup_transcript(job_id, result, output_dir)
+
+            # Check for cancellation before completing
+            if is_job_cancelled(job_id):
+                emit_progress(job_id, "cancelled", 0, "Job cancelled by user")
+                return
 
             download_urls = {
                 "text_url": f"/download/{job_id}/text",
@@ -337,7 +370,11 @@ def process_transcription(job_id: str, audio_path: Path, output_dir: Path, do_cl
             )
 
         except Exception as exc:
-            emit_progress(job_id, "failed", 0, f"Error: {str(exc)}")
+            # Don't report error if job was cancelled
+            if is_job_cancelled(job_id):
+                emit_progress(job_id, "cancelled", 0, "Job cancelled by user")
+            else:
+                emit_progress(job_id, "failed", 0, f"Error: {str(exc)}")
 
 
 def cleanup_transcript(job_id: str, result: TranscriptionResult, output_dir: Path):
@@ -360,6 +397,10 @@ def cleanup_transcript(job_id: str, result: TranscriptionResult, output_dir: Pat
     cleaned_chunks = []
 
     for idx, chunk in enumerate(chunks, start=1):
+        # Check for cancellation before processing each chunk
+        if is_job_cancelled(job_id):
+            return
+
         emit_progress(job_id, "processing", 65 + (idx * 10 // len(chunks)), f"Cleaning chunk {idx}/{len(chunks)}")
         prompt = build_prompt(chunk)
         try:
@@ -381,6 +422,9 @@ def cleanup_transcript(job_id: str, result: TranscriptionResult, output_dir: Pat
             else:
                 cleaned_chunks.append(cleaned_text_chunk)
         except Exception as e:
+            # Check if error is due to cancellation
+            if is_job_cancelled(job_id):
+                return
             print(f"ERROR: Chunk {idx}/{len(chunks)} failed to clean: {str(e)}", flush=True)
             # Fall back to original chunk on error
             cleaned_chunks.append(chunk.strip())
@@ -399,6 +443,10 @@ def cleanup_transcript(job_id: str, result: TranscriptionResult, output_dir: Pat
     # Generate summary
     emit_progress(job_id, "processing", 80, "Generating summary...")
 
+    # Check for cancellation before summary
+    if is_job_cancelled(job_id):
+        return
+
     if len(cleaned_text) <= 16000:
         summary_prompt = build_summary_prompt(cleaned_text)
         summary = call_claude(
@@ -413,6 +461,10 @@ def cleanup_transcript(job_id: str, result: TranscriptionResult, output_dir: Pat
         summary_chunks = split_into_chunks(cleaned_text, 16000)
         chunk_notes = []
         for idx, chunk in enumerate(summary_chunks, start=1):
+            # Check for cancellation before processing each summary chunk
+            if is_job_cancelled(job_id):
+                return
+
             emit_progress(job_id, "processing", 80 + (idx * 5 // len(summary_chunks)), f"Summary chunk {idx}/{len(summary_chunks)}")
             notes = call_claude(
                 prompt=build_summary_chunk_prompt(chunk),
@@ -702,8 +754,10 @@ def get_segments(job_id: str):
     if not output_dir.exists():
         return jsonify({"error": "Output not found"}), 404
 
-    # Find raw JSON file with segments
-    json_files = list(output_dir.glob("*_raw.json"))
+    # Find raw JSON file with segments (try both new and old naming)
+    json_files = list(output_dir.glob("*_timestamps.json"))
+    if not json_files:
+        json_files = list(output_dir.glob("*_raw.json"))  # Fallback to old naming
     if not json_files:
         return jsonify({"error": "Segments not found"}), 404
 
@@ -870,7 +924,7 @@ def upload_transcript():
 
     # Save raw transcript
     transcript_filename = Path(file.filename).stem
-    raw_suffix = "_raw" if do_cleanup else ""
+    raw_suffix = "_timestamps" if do_cleanup else ""
     text_path = output_dir / f"{transcript_filename}{raw_suffix}.txt"
     text_path.write_text(transcript_content, encoding="utf-8")
 
@@ -1027,8 +1081,83 @@ def download(job_id: str, file_type: str):
         return send_file(job["m4a_path"], as_attachment=True, mimetype="audio/mp4")
     elif file_type == "flac" and "flac_path" in job:
         return send_file(job["flac_path"], as_attachment=True, mimetype="audio/flac")
+    elif file_type == "all":
+        # Create a zip file with all job files
+        import zipfile
+        import tempfile
+
+        with jobs_lock:
+            job = jobs.get(job_id)
+
+        if not job:
+            return jsonify({"error": "Job not found"}), 404
+
+        # Create temporary zip file
+        temp_zip = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
+
+        try:
+            with zipfile.ZipFile(temp_zip.name, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                # Add text file
+                if "text_path" in job and Path(job["text_path"]).exists():
+                    zipf.write(job["text_path"], Path(job["text_path"]).name)
+
+                # Add JSON file
+                if "json_path" in job and Path(job["json_path"]).exists():
+                    zipf.write(job["json_path"], Path(job["json_path"]).name)
+
+                # Add summary file
+                if "summary_path" in job and Path(job["summary_path"]).exists():
+                    zipf.write(job["summary_path"], Path(job["summary_path"]).name)
+
+                # Add M4A file
+                if "m4a_path" in job and Path(job["m4a_path"]).exists():
+                    zipf.write(job["m4a_path"], Path(job["m4a_path"]).name)
+
+                # Add FLAC file
+                if "flac_path" in job and Path(job["flac_path"]).exists():
+                    zipf.write(job["flac_path"], Path(job["flac_path"]).name)
+
+            # Get base filename for the zip
+            base_name = job.get("filename", "transcription")
+            if base_name.endswith(('.mp3', '.wav', '.m4a', '.flac')):
+                base_name = Path(base_name).stem
+
+            zip_filename = f"{base_name}_complete.zip"
+
+            return send_file(
+                temp_zip.name,
+                as_attachment=True,
+                download_name=zip_filename,
+                mimetype='application/zip'
+            )
+        except Exception as e:
+            if Path(temp_zip.name).exists():
+                Path(temp_zip.name).unlink()
+            return jsonify({"error": f"Failed to create zip: {str(e)}"}), 500
     else:
         return jsonify({"error": "File not found"}), 404
+
+
+@app.route("/job/<job_id>/cancel", methods=["POST"])
+def cancel_job(job_id: str):
+    """Cancel a running or queued job."""
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if not job:
+            return jsonify({"error": "Job not found"}), 404
+
+        # Only allow cancellation of queued or processing jobs
+        if job["status"] not in ["queued", "processing"]:
+            return jsonify({"error": f"Cannot cancel job with status: {job['status']}"}), 400
+
+    # Add job to cancelled set
+    with cancelled_lock:
+        cancelled_jobs.add(job_id)
+
+    # Update job status
+    emit_progress(job_id, "cancelling", job.get("progress", 0), "Cancelling job...")
+
+    return jsonify({"success": True, "message": "Job cancellation requested"})
 
 
 @app.route("/job/<job_id>", methods=["DELETE"])
@@ -1053,6 +1182,10 @@ def delete_job(job_id: str):
         # Remove from jobs dictionary
         with jobs_lock:
             del jobs[job_id]
+
+        # Remove from cancelled set if present
+        with cancelled_lock:
+            cancelled_jobs.discard(job_id)
 
         return jsonify({"success": True, "message": "Job deleted successfully"})
     except Exception as exc:
@@ -1088,8 +1221,8 @@ def load_existing_jobs():
         # Look for audio files
         m4a_path = None
         flac_path = None
-        m4a_files = list(job_dir.glob("*_mono_normalized.m4a"))
-        flac_files = list(job_dir.glob("*_mono_normalized.flac"))
+        m4a_files = list(job_dir.glob("*.m4a"))
+        flac_files = list(job_dir.glob("*.flac"))
 
         if m4a_files:
             m4a_path = m4a_files[0]
@@ -1100,8 +1233,12 @@ def load_existing_jobs():
         for txt_file in txt_files:
             if txt_file.stem.endswith("_summary"):
                 summary_path = txt_file
-            elif txt_file.stem.endswith("_raw"):
+            elif txt_file.stem.endswith("_timestamps"):
                 # Check if cleaned version exists
+                cleaned_name = txt_file.stem[:-11] + ".txt"  # Remove _timestamps
+                cleaned_path = txt_file.parent / cleaned_name
+            elif txt_file.stem.endswith("_raw"):
+                # Legacy naming - check if cleaned version exists
                 cleaned_name = txt_file.stem[:-4] + ".txt"  # Remove _raw
                 cleaned_path = txt_file.parent / cleaned_name
                 if cleaned_path.exists():
@@ -1116,7 +1253,12 @@ def load_existing_jobs():
                     base_filename = txt_file.stem
 
         for json_file in json_files:
-            if json_file.stem.endswith("_raw"):
+            if json_file.stem.endswith("_timestamps"):
+                json_path = json_file
+                if base_filename is None:
+                    base_filename = json_file.stem[:-11]
+            elif json_file.stem.endswith("_raw"):
+                # Legacy naming
                 json_path = json_file
                 if base_filename is None:
                     base_filename = json_file.stem[:-4]

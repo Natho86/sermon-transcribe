@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sermon Transcription Service</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎙️</text></svg>">
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
     <style>
         * {
@@ -203,6 +204,16 @@
             color: #991b1b;
         }
 
+        .status-cancelling {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .status-cancelled {
+            background: #e5e7eb;
+            color: #374151;
+        }
+
         .progress-bar {
             width: 100%;
             height: 8px;
@@ -365,6 +376,31 @@
         }
 
         .job.compact .delete-btn {
+            padding: 5px 12px;
+            font-size: 12px;
+            margin-top: 5px;
+        }
+
+        .cancel-btn {
+            background: #f59e0b;
+            color: white;
+            padding: 8px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-top: 10px;
+        }
+
+        .cancel-btn:hover {
+            background: #d97706;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(245, 158, 11, 0.4);
+        }
+
+        .job.compact .cancel-btn {
             padding: 5px 12px;
             font-size: 12px;
             margin-top: 5px;
@@ -655,6 +691,15 @@
 
         @keyframes spin {
             to { transform: rotate(360deg); }
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.5;
+            }
         }
     </style>
 </head>
@@ -1277,13 +1322,20 @@
                         ${job.summary_url ? `<a href="#" class="view-file" data-url="${job.summary_url}" data-type="summary" data-filename="${job.filename}">📝 Summary</a>` : ''}
                         ${job.m4a_url ? `<a href="${job.m4a_url}" download>🎵 M4A</a>` : ''}
                         ${job.flac_url ? `<a href="${job.flac_url}" download>🎵 FLAC</a>` : ''}
+                        <a href="#" class="download-all-btn" data-job-id="${job.job_id}" style="font-weight: bold; color: white; background: #2563eb; padding: 8px 12px; border-radius: 6px; text-decoration: none;">📦 Download All</a>
                     </div>
                     <div class="job-actions">
                         <button class="retranscribe-btn" data-job-id="${job.job_id}">🔄 Re-transcribe</button>
                         <button class="delete-btn" data-job-id="${job.job_id}">🗑️ Delete</button>
                     </div>
                 `;
-            } else if (job.status === 'failed') {
+            } else if (job.status === 'queued' || job.status === 'processing') {
+                jobActions = `
+                    <div class="job-actions">
+                        <button class="cancel-btn" data-job-id="${job.job_id}">⏹️ Cancel</button>
+                    </div>
+                `;
+            } else if (job.status === 'failed' || job.status === 'cancelled') {
                 jobActions = `
                     <div class="job-actions">
                         <button class="retranscribe-btn" data-job-id="${job.job_id}">🔄 Re-transcribe</button>
@@ -1403,12 +1455,54 @@
                 deleteJob(jobId);
             }
 
+            // Handle cancel button clicks
+            if (e.target.classList.contains('cancel-btn') || e.target.closest('.cancel-btn')) {
+                const btn = e.target.classList.contains('cancel-btn') ? e.target : e.target.closest('.cancel-btn');
+                const jobId = btn.dataset.jobId;
+                cancelJob(jobId);
+            }
+
             if (e.target.classList.contains('retranscribe-btn') || e.target.closest('.retranscribe-btn')) {
                 const btn = e.target.classList.contains('retranscribe-btn') ? e.target : e.target.closest('.retranscribe-btn');
                 const jobId = btn.dataset.jobId;
                 retranscribeJob(jobId);
             }
+
+            if (e.target.classList.contains('download-all-btn') || e.target.closest('.download-all-btn')) {
+                e.preventDefault();
+                const btn = e.target.classList.contains('download-all-btn') ? e.target : e.target.closest('.download-all-btn');
+                const jobId = btn.dataset.jobId;
+                downloadAllFiles(jobId, btn);
+            }
         });
+
+        // Cancel job function
+        async function cancelJob(jobId) {
+            const job = jobs[jobId];
+            if (!job) return;
+
+            if (!confirm(`Are you sure you want to cancel "${job.filename}"?\n\nThe job will be stopped as soon as possible.`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/job/${jobId}/cancel`, {
+                    method: 'POST'
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    // Show success message
+                    showSimpleNotification('✅ Job cancellation requested', 'success');
+                    // The job status will be updated via WebSocket
+                } else {
+                    alert('Failed to cancel job: ' + data.error);
+                }
+            } catch (error) {
+                alert('Error cancelling job: ' + error.message);
+            }
+        }
 
         // Delete job function
         async function deleteJob(jobId) {
@@ -1543,6 +1637,75 @@
                     alert('Error starting re-transcription: ' + error.message);
                 }
             });
+        }
+
+        // Download all files function
+        async function downloadAllFiles(jobId, btnElement) {
+            const job = jobs[jobId];
+            if (!job) return;
+
+            // Store original button content
+            const originalContent = btnElement.innerHTML;
+
+            // Show loading state
+            btnElement.innerHTML = '⏳ Preparing files...';
+            btnElement.style.pointerEvents = 'none';
+            btnElement.style.opacity = '0.7';
+
+            // Create a loading notification
+            const loadingNotif = document.createElement('div');
+            loadingNotif.style.cssText = `
+                position: fixed;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                padding: 30px 40px;
+                background: white;
+                border: 2px solid #2563eb;
+                border-radius: 12px;
+                box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+                z-index: 10000;
+                color: #333;
+                font-weight: 600;
+                text-align: center;
+                min-width: 300px;
+            `;
+            loadingNotif.innerHTML = `
+                <div style="font-size: 48px; margin-bottom: 15px;">📦</div>
+                <div style="font-size: 18px; margin-bottom: 10px;">Preparing Download</div>
+                <div style="font-size: 14px; color: #666;">Creating zip file with all job files...</div>
+                <div style="margin-top: 15px;">
+                    <div style="width: 100%; height: 4px; background: #e5e7eb; border-radius: 2px; overflow: hidden;">
+                        <div style="width: 100%; height: 100%; background: #2563eb; animation: pulse 1.5s ease-in-out infinite;"></div>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(loadingNotif);
+
+            try {
+                // Create a hidden link and trigger download
+                const link = document.createElement('a');
+                link.href = `/download/${jobId}/all`;
+                link.download = '';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+
+                // Wait a bit before removing notification to ensure download started
+                setTimeout(() => {
+                    document.body.removeChild(loadingNotif);
+                    btnElement.innerHTML = originalContent;
+                    btnElement.style.pointerEvents = '';
+                    btnElement.style.opacity = '';
+                    showSimpleNotification('✅ Download started successfully', 'success');
+                }, 2000);
+            } catch (error) {
+                document.body.removeChild(loadingNotif);
+                btnElement.innerHTML = originalContent;
+                btnElement.style.pointerEvents = '';
+                btnElement.style.opacity = '';
+                showSimpleNotification('❌ Failed to start download: ' + error.message, 'error');
+            }
         }
 
         // Simple notification function
