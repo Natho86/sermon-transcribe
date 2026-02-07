@@ -12,7 +12,6 @@ A powerful audio transcription application designed for processing sermon record
 - **Audio Conversion**: Normalize and convert audio files to M4A or FLAC formats
 - **Batch Processing**: Process multiple files or entire directories at once
 - **Docker Support**: Easy deployment with Docker and docker-compose
-- **Unraid Ready**: Optimized for Unraid NAS deployment with Docker Compose Manager
 
 ## Requirements
 
@@ -49,14 +48,6 @@ A powerful audio transcription application designed for processing sermon record
    ```
    http://localhost:5000
    ```
-
-### Unraid Deployment
-
-For Unraid users:
-- **Quick Start**: See [UNRAID_QUICKSTART.md](UNRAID_QUICKSTART.md) for minimal setup (3 steps)
-- **Full Guide**: See [UNRAID_DEPLOYMENT.md](UNRAID_DEPLOYMENT.md) for detailed instructions
-
-**Note**: The `run-web.sh` script is optional for Unraid - you can deploy directly with Docker Compose Manager.
 
 ## Configuration
 
