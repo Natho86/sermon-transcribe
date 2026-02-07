@@ -2,7 +2,7 @@ services:
   audio-transcribe-web:
     build:
       context: .
-      dockerfile: ${DOCKERFILE:-Dockerfile.cpu}
+      dockerfile: Dockerfile.cpu
     container_name: audio-transcribe-web
     ports:
       - "${FLASK_PORT:-5000}:5000"
