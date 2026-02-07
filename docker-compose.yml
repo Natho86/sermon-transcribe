@@ -1,24 +1,33 @@
 services:
-  sermon-transcribe-web:
+  audio-transcribe-web:
     build:
       context: .
       dockerfile: ${DOCKERFILE:-Dockerfile.cpu}
-    container_name: sermon-transcribe-web
+    container_name: audio-transcribe-web
     ports:
-      - "5000:5000"
+      - "${FLASK_PORT:-5000}:5000"
     environment:
       - FLASK_HOST=0.0.0.0
       - FLASK_PORT=5000
       - FLASK_DEBUG=false
       - WHISPER_MODEL=${WHISPER_MODEL:-base}
       - WHISPER_DEVICE=${WHISPER_DEVICE:-cpu}
+      - WHISPER_LANGUAGE=${WHISPER_LANGUAGE:-en}
       - HF_TOKEN=${HF_TOKEN}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - CLAUDE_MODEL=claude-sonnet-4-5-20250929
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-sonnet-4-5-20250929}
     env_file:
       - .env
     volumes:
-      - ./uploads:/app/uploads
-      - ./output:/app/output
-      - ./model_cache:/app/model_cache
+      # Persistent storage for uploads, outputs, and model cache
+      # These paths can be customized in .env file
+      - ${UPLOAD_DIR:-./uploads}:/app/uploads
+      - ${OUTPUT_DIR:-./output}:/app/output
+      - ${MODEL_CACHE_DIR:-./model_cache}:/app/model_cache
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/').read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s

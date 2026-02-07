@@ -26,6 +26,10 @@ ENV PYTHONPATH=/app/src
 # Create directories for uploads and outputs
 RUN mkdir -p /app/uploads /app/output /app/model_cache
 
+# Verify templates are present (will fail build if missing)
+RUN test -f /app/src/sermon_transcribe/templates/index.html && \
+    test -f /app/src/sermon_transcribe/templates/review.html
+
 # Expose port for web interface
 EXPOSE 5000
 

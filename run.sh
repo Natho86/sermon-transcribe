@@ -100,7 +100,7 @@ fi
 if [[ "$mode" == "cleanup" ]]; then
   exec docker run "${docker_args[@]}" \
     --entrypoint python3 \
-    sermon-transcribe \
+    audio-transcribe \
     -m sermon_transcribe.cleanup \
     "${args[@]}"
 fi
@@ -108,12 +108,12 @@ fi
 if [[ "$mode" == "convert" ]]; then
   exec docker run "${docker_args[@]}" \
     --entrypoint python3 \
-    sermon-transcribe \
+    audio-transcribe \
     -m sermon_transcribe.convert \
     "${args[@]}"
 fi
 
 exec docker run "${docker_args[@]}" \
-  sermon-transcribe \
+  audio-transcribe \
   --model-cache /app/model_cache \
   "${args[@]}"

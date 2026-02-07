@@ -1,13 +1,13 @@
-# sermon-transcribe
-Sermon audio transcriptions using faster-whisper utilising the GPU
+# Audio Transcription with Whisper
+High-quality audio transcriptions using faster-whisper with CPU/GPU support
 
 ## Project structure
-  - `src/sermon_transcribe`: CLI and transcription pipeline
+  - `src/audio_transcribe`: CLI and transcription pipeline
 
 ## Local usage
 Run the CLI directly from source:
 
-    PYTHONPATH=src python3 -m sermon_transcribe \
+    PYTHONPATH=src python3 -m audio_transcribe \
         --input /path/to/audio_or_dir
 
 Common options:
@@ -23,7 +23,7 @@ Common options:
 Clean up `.txt` transcripts into paragraphs and sentences with minimal edits, then generate a summary:
 
     ANTHROPIC_API_KEY=your_key_here \
-    PYTHONPATH=src python3 -m sermon_transcribe.cleanup \
+    PYTHONPATH=src python3 -m audio_transcribe.cleanup \
         --input /path/to/transcripts_or_dir
 
 Outputs:
@@ -45,12 +45,21 @@ Common options:
   - `--reprocess` to re-run cleanup even if a cleaned file already exists.
   - `--recursive` to scan subdirectories.
 
-## Docker (GPU)
+## Docker Deployment
+
+### Unraid Deployment
+For Unraid users:
+- **Quick Start**: See [UNRAID_QUICKSTART.md](UNRAID_QUICKSTART.md) for minimal setup (3 steps)
+- **Full Guide**: See [UNRAID_DEPLOYMENT.md](UNRAID_DEPLOYMENT.md) for detailed instructions
+
+**Note**: The `run-web.sh` script is optional for Unraid - you can deploy directly with Docker Compose Manager.
+
+### Docker (GPU)
 This is the simplest way to avoid NixOS shared-library issues. Requires NVIDIA Container Toolkit.
 
   - Build the image once:
 
-    docker build -t sermon-transcribe .
+    docker build -t audio-transcribe .
 
   - Use the wrapper script for day-to-day runs:
 
@@ -64,21 +73,21 @@ The wrapper uses:
 
   - Confirm CUDA is visible:
 
-    docker run --rm --device nvidia.com/gpu=all sermon-transcribe \
+    docker run --rm --device nvidia.com/gpu=all audio-transcribe \
         python3 -c "import ctranslate2; print('cuda', ctranslate2.get_cuda_device_count())"
 
   - Mount a local folder (example):
 
-    docker run --rm --device nvidia.com/gpu=all -v "$PWD:/app" sermon-transcribe bash
+    docker run --rm --device nvidia.com/gpu=all -v "$PWD:/app" audio-transcribe bash
 
   - Run the CLI inside the container (example):
 
-    docker run --rm --device nvidia.com/gpu=all -v "$PWD:/app" sermon-transcribe \
+    docker run --rm --device nvidia.com/gpu=all -v "$PWD:/app" audio-transcribe \
         --input /app/path/to/audio_or_dir
 
   - Use your Hugging Face token from `.env` (avoids rate limits):
 
-    docker run --rm --device nvidia.com/gpu=all --env-file .env -v "$PWD:/app" sermon-transcribe \
+    docker run --rm --device nvidia.com/gpu=all --env-file .env -v "$PWD:/app" audio-transcribe \
         --input /app/path/to/audio_or_dir
 
   - Persist the model cache between runs:
@@ -87,7 +96,7 @@ The wrapper uses:
     docker run --rm --device nvidia.com/gpu=all --env-file .env \
         -v "$PWD:/app" \
         -v "$PWD/model_cache:/app/model_cache" \
-        sermon-transcribe \
+        audio-transcribe \
         --input /app/path/to/audio_or_dir \
         --model-cache /app/model_cache
 

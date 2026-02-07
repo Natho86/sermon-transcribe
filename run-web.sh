@@ -5,7 +5,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 show_help() {
   cat <<'EOF'
-Sermon Transcription Web Application
+Audio Transcription Web Application
 
 Usage:
   ./run-web.sh [command] [--gpu]
@@ -65,8 +65,19 @@ detect_gpu() {
 
 cd "$SCRIPT_DIR"
 
+# Load .env file if it exists to get directory paths
+if [[ -f .env ]]; then
+  # Export variables from .env
+  export $(grep -v '^#' .env | xargs -d '\n')
+fi
+
+# Use environment variables or defaults
+UPLOAD_DIR="${UPLOAD_DIR:-./uploads}"
+OUTPUT_DIR="${OUTPUT_DIR:-./output}"
+MODEL_CACHE_DIR="${MODEL_CACHE_DIR:-./model_cache}"
+
 # Create necessary directories
-mkdir -p uploads output model_cache
+mkdir -p "$UPLOAD_DIR" "$OUTPUT_DIR" "$MODEL_CACHE_DIR"
 
 # Check for .env file
 if [[ ! -f .env ]]; then
@@ -148,7 +159,7 @@ fi
 
 case "${COMMAND:-start}" in
   start)
-    echo "Starting Sermon Transcription Web Application ($MODE_MSG)..."
+    echo "Starting Audio Transcription Web Application ($MODE_MSG)..."
     $COMPOSE_CMD up -d
     echo ""
     echo "✅ Web application started in $MODE_MSG!"

@@ -4,7 +4,7 @@
 This repository currently contains a minimal setup with only `README.md` at the root. No source, tests, or assets are present yet. When adding code, keep it organized and predictable (for example, place application code under `src/`, tests under `tests/`, and small data/assets under `assets/`).
 
 ## Build, Test, and Development Commands
-No build or runtime commands are defined in the repository at this time. If you add tooling, document the exact commands here with short explanations (for example, `python -m sermon_transcribe` to run locally, or `pytest` to execute tests).
+No build or runtime commands are defined in the repository at this time. If you add tooling, document the exact commands here with short explanations (for example, `python -m audio_transcribe` to run locally, or `pytest` to execute tests).
 
 ## Coding Style & Naming Conventions
 No formatting or linting tools are configured yet. Until tooling is added:
