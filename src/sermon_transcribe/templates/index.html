@@ -2,9 +2,13 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="format-detection" content="telephone=no">
     <title>Sermon Transcription Service</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎙️</text></svg>">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎙️</text></svg>">
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
     <style>
         * {
@@ -929,6 +933,32 @@
         let uploadMode = 'audio'; // 'audio' or 'transcript'
         let isUploading = false;
         let uploadQueue = [];
+        let wakeLock = null; // Screen wake lock for mobile devices
+
+        // Request wake lock during uploads to prevent screen sleep
+        async function requestWakeLock() {
+            if ('wakeLock' in navigator) {
+                try {
+                    wakeLock = await navigator.wakeLock.request('screen');
+                    console.log('Wake lock acquired - screen will stay on during upload');
+                    wakeLock.addEventListener('release', () => {
+                        console.log('Wake lock released');
+                    });
+                } catch (err) {
+                    console.log('Wake lock not available:', err);
+                }
+            }
+        }
+
+        // Release wake lock when uploads complete
+        function releaseWakeLock() {
+            if (wakeLock !== null) {
+                wakeLock.release().then(() => {
+                    wakeLock = null;
+                    console.log('Wake lock released');
+                });
+            }
+        }
 
         // Modal elements
         const fileModal = document.getElementById('fileModal');
@@ -1116,11 +1146,14 @@
         });
 
         // Upload
-        uploadBtn.addEventListener('click', () => {
+        uploadBtn.addEventListener('click', async () => {
             if (selectedFiles.length === 0) return;
 
             uploadBtn.disabled = true;
             isUploading = true;
+
+            // Acquire wake lock to prevent screen sleep during upload
+            await requestWakeLock();
 
             // Disable remove buttons
             document.querySelectorAll('.queue-remove').forEach(btn => btn.disabled = true);
@@ -1141,6 +1174,7 @@
             if (!nextItem) {
                 // All files processed
                 isUploading = false;
+                releaseWakeLock(); // Release wake lock when all uploads complete
                 selectedFiles = [];
                 fileInput.value = '';
                 fileName.textContent = '';
@@ -1255,14 +1289,49 @@
                 handleUploadError(index, 'Upload cancelled');
             });
 
+            // Keep connection alive with progress updates (mobile Safari issue)
+            let lastProgressTime = Date.now();
+            let progressCheckInterval = setInterval(() => {
+                const timeSinceLastProgress = Date.now() - lastProgressTime;
+                if (timeSinceLastProgress > 30000) { // 30 seconds without progress
+                    console.warn('No upload progress for 30 seconds');
+                    clearInterval(progressCheckInterval);
+                    xhr.abort();
+                    handleUploadError(index, 'Upload stalled - no progress for 30 seconds');
+                }
+            }, 5000); // Check every 5 seconds
+
+            // Update last progress time on any progress event
+            xhr.upload.addEventListener('progress', () => {
+                lastProgressTime = Date.now();
+            });
+
+            // Clear interval on completion/error
+            const clearProgressCheck = () => clearInterval(progressCheckInterval);
+            xhr.addEventListener('load', clearProgressCheck);
+            xhr.addEventListener('error', clearProgressCheck);
+            xhr.addEventListener('abort', clearProgressCheck);
+            xhr.addEventListener('timeout', clearProgressCheck);
+
             // Send request
             console.log(`Starting upload: ${file.name} (${formatBytes(file.size)}) to ${endpoint}`);
+            console.log(`Browser: ${navigator.userAgent}`);
             xhr.open('POST', endpoint);
 
             // Add headers for better mobile compatibility
             xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
 
-            xhr.send(formData);
+            // Prevent connection pooling issues on mobile
+            xhr.setRequestHeader('Connection', 'keep-alive');
+
+            try {
+                xhr.send(formData);
+                console.log('FormData sent successfully');
+            } catch (e) {
+                console.error('Error sending FormData:', e);
+                clearInterval(progressCheckInterval);
+                handleUploadError(index, `Failed to send: ${e.message}`);
+            }
         }
 
         function handleUploadError(index, errorMessage) {
