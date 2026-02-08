@@ -1026,6 +1026,16 @@
         // Load existing jobs when page loads
         loadExistingJobs();
 
+        // Detect iOS Chrome and show warning
+        const isIOSChrome = /CriOS/.test(navigator.userAgent) && /iPhone|iPad|iPod/.test(navigator.userAgent);
+        if (isIOSChrome) {
+            console.warn('iOS Chrome detected - large uploads may fail. Recommend using Safari on iOS.');
+            const warningDiv = document.createElement('div');
+            warningDiv.style.cssText = 'background: #ff9800; color: white; padding: 15px; margin: 20px 0; border-radius: 10px; text-align: center;';
+            warningDiv.innerHTML = '<strong>⚠️ iOS Chrome Detected</strong><br>For reliable large file uploads, please use <strong>Safari</strong> on iOS instead of Chrome.';
+            document.querySelector('.container').insertBefore(warningDiv, document.querySelector('.upload-area'));
+        }
+
         // Mode toggle handlers
         audioModeBtn.addEventListener('click', () => {
             uploadMode = 'audio';
@@ -1280,6 +1290,11 @@
                 }
             });
 
+            // Add listeners for ALL XHR events to debug iOS issue
+            xhr.upload.addEventListener('loadstart', () => console.log('XHR upload: loadstart'));
+            xhr.upload.addEventListener('loadend', () => console.log('XHR upload: loadend'));
+            xhr.addEventListener('readystatechange', () => console.log(`XHR readyState: ${xhr.readyState} (0=UNSENT, 1=OPENED, 2=HEADERS_RECEIVED, 3=LOADING, 4=DONE)`));
+
             // Handle timeout
             xhr.addEventListener('timeout', () => {
                 console.error('Upload timeout');
@@ -1340,23 +1355,46 @@
 
             // Keep connection alive with progress updates (mobile Safari issue)
             let lastProgressTime = Date.now();
+            let lastProgressBytes = 0;
+            let keepAliveInterval = null;
+
             let progressCheckInterval = setInterval(() => {
                 const timeSinceLastProgress = Date.now() - lastProgressTime;
-                if (timeSinceLastProgress > 30000) { // 30 seconds without progress
-                    console.warn('No upload progress for 30 seconds');
+                if (timeSinceLastProgress > 15000) { // Reduced to 15 seconds
+                    console.warn(`No upload progress for 15 seconds (last: ${formatBytes(lastProgressBytes)})`);
                     clearInterval(progressCheckInterval);
+                    if (keepAliveInterval) clearInterval(keepAliveInterval);
                     xhr.abort();
-                    handleUploadError(index, 'Upload stalled - no progress for 30 seconds');
+                    handleUploadError(index, 'Upload stalled - iOS may have suspended the connection. Try using Safari instead of Chrome on iOS, or use a desktop browser.');
                 }
-            }, 5000); // Check every 5 seconds
+            }, 3000); // Check every 3 seconds
+
+            // iOS Safari workaround: Keep page active during upload
+            // This prevents iOS from suspending the connection
+            let activityCounter = 0;
+            keepAliveInterval = setInterval(() => {
+                // Update page title to show activity
+                document.title = `Uploading... ${activityCounter % 4 === 0 ? '⬆️' : activityCounter % 4 === 1 ? '⬆️⬆️' : activityCounter % 4 === 2 ? '⬆️⬆️⬆️' : '⬆️⬆️⬆️⬆️'}`;
+                activityCounter++;
+
+                // Log to console to keep connection alive
+                console.log(`Upload active: ${formatBytes(lastProgressBytes)} sent`);
+            }, 1000); // Update every second
 
             // Update last progress time on any progress event
-            xhr.upload.addEventListener('progress', () => {
+            xhr.upload.addEventListener('progress', (e) => {
                 lastProgressTime = Date.now();
+                if (e.lengthComputable) {
+                    lastProgressBytes = e.loaded;
+                }
             });
 
-            // Clear interval on completion/error
-            const clearProgressCheck = () => clearInterval(progressCheckInterval);
+            // Clear intervals and restore title on completion/error
+            const clearProgressCheck = () => {
+                clearInterval(progressCheckInterval);
+                if (keepAliveInterval) clearInterval(keepAliveInterval);
+                document.title = 'Sermon Transcription Service'; // Restore title
+            };
             xhr.addEventListener('load', clearProgressCheck);
             xhr.addEventListener('error', clearProgressCheck);
             xhr.addEventListener('abort', clearProgressCheck);
