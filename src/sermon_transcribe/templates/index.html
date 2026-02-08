@@ -1184,17 +1184,28 @@
             const xhr = new XMLHttpRequest();
             const endpoint = uploadMode === 'audio' ? '/upload' : '/upload-transcript';
 
+            // Set timeout for mobile compatibility (10 minutes for large files)
+            xhr.timeout = 600000; // 10 minutes in milliseconds
+
             // Track upload progress
             xhr.upload.addEventListener('progress', (e) => {
                 if (e.lengthComputable) {
                     const percentComplete = Math.round((e.loaded / e.total) * 100);
                     progressFill.style.width = percentComplete + '%';
                     messageEl.textContent = `Uploading: ${percentComplete}% (${formatBytes(e.loaded)} / ${formatBytes(e.total)})`;
+                    console.log(`Upload progress: ${percentComplete}% (${formatBytes(e.loaded)} / ${formatBytes(e.total)})`);
                 }
+            });
+
+            // Handle timeout
+            xhr.addEventListener('timeout', () => {
+                console.error('Upload timeout');
+                handleUploadError(index, 'Upload timeout - file may be too large or connection too slow');
             });
 
             // Handle completion
             xhr.addEventListener('load', () => {
+                console.log(`Upload complete: status ${xhr.status}`);
                 if (xhr.status >= 200 && xhr.status < 300) {
                     try {
                         const data = JSON.parse(xhr.responseText);
@@ -1233,12 +1244,24 @@
             });
 
             // Handle errors
-            xhr.addEventListener('error', () => {
-                handleUploadError(index, 'Network error');
+            xhr.addEventListener('error', (e) => {
+                console.error('Upload network error:', e);
+                handleUploadError(index, 'Network error - check your connection');
+            });
+
+            // Handle abort
+            xhr.addEventListener('abort', () => {
+                console.log('Upload aborted');
+                handleUploadError(index, 'Upload cancelled');
             });
 
             // Send request
+            console.log(`Starting upload: ${file.name} (${formatBytes(file.size)}) to ${endpoint}`);
             xhr.open('POST', endpoint);
+
+            // Add headers for better mobile compatibility
+            xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+
             xhr.send(formData);
         }
 

@@ -811,12 +811,19 @@ def get_segments(job_id: str):
 @auth.login_required
 def upload():
     """Handle file upload and start transcription."""
+    print(f"Upload request received from {request.remote_addr}", flush=True)
+    print(f"Request headers: User-Agent={request.headers.get('User-Agent')}", flush=True)
+
     if "audio" not in request.files:
+        print("Error: No audio file in request", flush=True)
         return jsonify({"error": "No file provided"}), 400
 
     file = request.files["audio"]
     if file.filename == "":
+        print("Error: Empty filename", flush=True)
         return jsonify({"error": "No file selected"}), 400
+
+    print(f"Receiving file: {file.filename}, content_length={request.content_length}", flush=True)
 
     do_cleanup = request.form.get("cleanup", "false").lower() == "true"
     convert_m4a = request.form.get("convert_m4a", "false").lower() == "true"
@@ -829,6 +836,7 @@ def upload():
 
     # Generate job ID
     job_id = secrets.token_hex(16)
+    print(f"Generated job_id: {job_id}", flush=True)
 
     # Save uploaded file
     ensure_dir(app.config["UPLOAD_FOLDER"])
@@ -837,7 +845,11 @@ def upload():
 
     audio_filename = Path(file.filename).name
     audio_path = upload_path / audio_filename
+
+    print(f"Saving file to: {audio_path}", flush=True)
     file.save(str(audio_path))
+    file_size = audio_path.stat().st_size
+    print(f"File saved successfully: {audio_filename} ({file_size} bytes)", flush=True)
 
     # Create output directory
     output_dir = app.config["OUTPUT_FOLDER"] / job_id
@@ -865,6 +877,7 @@ def upload():
     )
     thread.start()
 
+    print(f"Upload complete: job_id={job_id}, returning response", flush=True)
     return jsonify({"job_id": job_id, "status": "queued"})
 
 
