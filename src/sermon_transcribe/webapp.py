@@ -11,6 +11,8 @@ from typing import Dict, Optional
 
 from flask import Flask, jsonify, render_template, request, send_file
 from flask_socketio import SocketIO, emit
+from flask_httpauth import HTTPBasicAuth
+from werkzeug.security import generate_password_hash, check_password_hash
 
 from sermon_transcribe.cleanup import (
     apply_disclaimer,
@@ -36,6 +38,32 @@ app.config["MAX_CONTENT_LENGTH"] = 4 * 1024 * 1024 * 1024  # 4GB max file size
 app.config["UPLOAD_FOLDER"] = Path("/app/uploads").resolve()
 app.config["OUTPUT_FOLDER"] = Path("/app/output").resolve()
 app.config["MODEL_CACHE"] = Path("/app/model_cache").resolve()
+
+# Setup HTTP Basic Authentication
+auth = HTTPBasicAuth()
+
+# User credentials from environment variables
+users = {}
+auth_username = os.environ.get("AUTH_USERNAME")
+auth_password = os.environ.get("AUTH_PASSWORD")
+
+if auth_username and auth_password:
+    # Store hashed password for security
+    users[auth_username] = generate_password_hash(auth_password)
+    print(f"Authentication enabled for user: {auth_username}", flush=True)
+else:
+    print("Warning: No authentication configured (AUTH_USERNAME and AUTH_PASSWORD not set)", flush=True)
+    print("Application is running in OPEN ACCESS mode - not suitable for public deployment!", flush=True)
+
+@auth.verify_password
+def verify_password(username, password):
+    """Verify username and password for basic auth."""
+    if not users:
+        # If no users configured, allow access (for backward compatibility)
+        return True
+    if username in users and check_password_hash(users[username], password):
+        return username
+    return None
 
 socketio = SocketIO(
     app,
@@ -498,12 +526,14 @@ def cleanup_transcript(job_id: str, result: TranscriptionResult, output_dir: Pat
 
 
 @app.route("/")
+@auth.login_required
 def index():
     """Main upload page."""
     return render_template("index.html")
 
 
 @app.route("/review/<job_id>")
+@auth.login_required
 def review(job_id: str):
     """Review page for editing transcript."""
     with jobs_lock:
@@ -519,6 +549,7 @@ def review(job_id: str):
 
 
 @app.route("/api/transcript/<job_id>", methods=["GET"])
+@auth.login_required
 def get_transcript(job_id: str):
     """Get transcript content."""
     with jobs_lock:
@@ -552,6 +583,7 @@ def get_transcript(job_id: str):
 
 
 @app.route("/api/transcript/<job_id>", methods=["POST"])
+@auth.login_required
 def save_transcript(job_id: str):
     """Save edited transcript."""
     with jobs_lock:
@@ -585,6 +617,7 @@ def save_transcript(job_id: str):
 
 
 @app.route("/api/transcript/<job_id>/reload", methods=["POST"])
+@auth.login_required
 def reload_transcript(job_id: str):
     """Reload transcript from backup."""
     with jobs_lock:
@@ -612,6 +645,7 @@ def reload_transcript(job_id: str):
 
 
 @app.route("/api/transcript/<job_id>/regenerate", methods=["POST"])
+@auth.login_required
 def regenerate_cleaned_transcript(job_id: str):
     """Regenerate cleaned transcript and summary from current transcript content."""
     with jobs_lock:
@@ -718,6 +752,7 @@ def regenerate_cleaned_transcript(job_id: str):
 
 
 @app.route("/api/audio/<job_id>")
+@auth.login_required
 def stream_audio(job_id: str):
     """Stream audio file."""
     with jobs_lock:
@@ -741,6 +776,7 @@ def stream_audio(job_id: str):
 
 
 @app.route("/api/segments/<job_id>")
+@auth.login_required
 def get_segments(job_id: str):
     """Get transcript segments with timestamps."""
     with jobs_lock:
@@ -772,6 +808,7 @@ def get_segments(job_id: str):
 
 
 @app.route("/upload", methods=["POST"])
+@auth.login_required
 def upload():
     """Handle file upload and start transcription."""
     if "audio" not in request.files:
@@ -832,6 +869,7 @@ def upload():
 
 
 @app.route("/api/retranscribe/<job_id>", methods=["POST"])
+@auth.login_required
 def retranscribe(job_id: str):
     """Re-transcribe an existing job with optional new language setting."""
     with jobs_lock:
@@ -895,6 +933,7 @@ def retranscribe(job_id: str):
 
 
 @app.route("/upload-transcript", methods=["POST"])
+@auth.login_required
 def upload_transcript():
     """Handle raw transcript upload and optionally process with Claude."""
     if "transcript" not in request.files:
@@ -1039,6 +1078,7 @@ def upload_transcript():
 
 
 @app.route("/status/<job_id>")
+@auth.login_required
 def status(job_id: str):
     """Get job status."""
     with jobs_lock:
@@ -1051,6 +1091,7 @@ def status(job_id: str):
 
 
 @app.route("/jobs")
+@auth.login_required
 def list_jobs():
     """List all jobs."""
     with jobs_lock:
@@ -1063,6 +1104,7 @@ def list_jobs():
 
 
 @app.route("/download/<job_id>/<file_type>")
+@auth.login_required
 def download(job_id: str, file_type: str):
     """Download transcription results."""
     with jobs_lock:
@@ -1139,6 +1181,7 @@ def download(job_id: str, file_type: str):
 
 
 @app.route("/job/<job_id>/cancel", methods=["POST"])
+@auth.login_required
 def cancel_job(job_id: str):
     """Cancel a running or queued job."""
     with jobs_lock:
@@ -1161,6 +1204,7 @@ def cancel_job(job_id: str):
 
 
 @app.route("/job/<job_id>", methods=["DELETE"])
+@auth.login_required
 def delete_job(job_id: str):
     """Delete a job and all its associated files."""
     with jobs_lock:

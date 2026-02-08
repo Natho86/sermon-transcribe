@@ -54,6 +54,11 @@ A powerful audio transcription application designed for processing sermon record
 ### Environment Variables (.env)
 
 ```bash
+# Authentication (REQUIRED for public deployment)
+# IMPORTANT: Set strong credentials if exposing via Cloudflare Tunnel or externally
+AUTH_USERNAME=admin
+AUTH_PASSWORD=your_secure_password_here
+
 # API Keys
 HF_TOKEN=your_huggingface_token          # Optional, helps avoid rate limits
 ANTHROPIC_API_KEY=your_anthropic_key     # Required for cleanup/summary features
@@ -283,6 +288,39 @@ Output formats:
 - JSON (transcripts with timestamps)
 - M4A (converted audio)
 - FLAC (converted audio)
+
+## Security & Authentication
+
+### HTTP Basic Authentication
+
+The application includes built-in HTTP Basic Authentication to protect access when deployed publicly (e.g., via Cloudflare Tunnel).
+
+**Setup:**
+
+1. Set credentials in `.env`:
+   ```bash
+   AUTH_USERNAME=admin
+   AUTH_PASSWORD=your_very_secure_password_here
+   ```
+
+2. When accessing the application, your browser will prompt for username and password.
+
+**Important Security Notes:**
+
+- ⚠️ **Always set AUTH_USERNAME and AUTH_PASSWORD for public deployments**
+- ⚠️ Use a strong, unique password (recommended: 20+ characters, mix of letters, numbers, symbols)
+- ⚠️ If credentials are not set, the application runs in OPEN ACCESS mode (suitable only for private networks)
+- ✅ The password is hashed using Werkzeug's secure password hashing (PBKDF2)
+- ✅ Authentication is enforced on all routes (pages and API endpoints)
+
+**For Cloudflare Tunnel Users:**
+
+When exposing through Cloudflare Tunnel, the application is fully secured with HTTP Basic Auth. Users will need to log in before accessing any functionality.
+
+**Changing Password:**
+
+1. Update `AUTH_PASSWORD` in `.env`
+2. Restart the container: `docker compose restart`
 
 ## Troubleshooting
 
