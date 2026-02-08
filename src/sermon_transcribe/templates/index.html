@@ -910,6 +910,36 @@
     </div>
 
     <script>
+        // Global error handler for debugging mobile issues
+        window.addEventListener('error', function(e) {
+            console.error('Global error:', e.error);
+            // Send error to server for logging
+            fetch('/api/log-error', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    message: e.message,
+                    stack: e.error ? e.error.stack : '',
+                    userAgent: navigator.userAgent,
+                    url: window.location.href
+                })
+            }).catch(err => console.error('Failed to log error:', err));
+        });
+
+        // Unhandled promise rejection handler
+        window.addEventListener('unhandledrejection', function(e) {
+            console.error('Unhandled promise rejection:', e.reason);
+            fetch('/api/log-error', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    message: 'Unhandled Promise Rejection: ' + e.reason,
+                    userAgent: navigator.userAgent,
+                    url: window.location.href
+                })
+            }).catch(err => console.error('Failed to log error:', err));
+        });
+
         const socket = io();
         const uploadArea = document.getElementById('uploadArea');
         const fileInput = document.getElementById('fileInput');
@@ -927,6 +957,8 @@
         const convertM4aCheckbox = document.getElementById('convertM4aCheckbox');
         const convertFlacCheckbox = document.getElementById('convertFlacCheckbox');
         const languageSelect = document.getElementById('languageSelect');
+
+        console.log('Script loaded, browser:', navigator.userAgent);
 
         let selectedFiles = [];
         let jobs = {};
@@ -1147,25 +1179,42 @@
 
         // Upload
         uploadBtn.addEventListener('click', async () => {
-            if (selectedFiles.length === 0) return;
+            try {
+                console.log('Upload button clicked');
+                if (selectedFiles.length === 0) {
+                    console.log('No files selected');
+                    return;
+                }
 
-            uploadBtn.disabled = true;
-            isUploading = true;
+                console.log(`Starting upload of ${selectedFiles.length} file(s)`);
+                uploadBtn.disabled = true;
+                isUploading = true;
 
-            // Acquire wake lock to prevent screen sleep during upload
-            await requestWakeLock();
+                // Acquire wake lock to prevent screen sleep during upload (non-blocking)
+                try {
+                    await requestWakeLock();
+                } catch (wakeLockErr) {
+                    console.log('Wake lock failed (non-critical):', wakeLockErr);
+                }
 
-            // Disable remove buttons
-            document.querySelectorAll('.queue-remove').forEach(btn => btn.disabled = true);
+                // Disable remove buttons
+                document.querySelectorAll('.queue-remove').forEach(btn => btn.disabled = true);
 
-            // Start processing queue
-            uploadQueue = selectedFiles.map((file, index) => ({
-                file: file,
-                index: index,
-                status: 'pending'
-            }));
+                // Start processing queue
+                uploadQueue = selectedFiles.map((file, index) => ({
+                    file: file,
+                    index: index,
+                    status: 'pending'
+                }));
 
-            processNextFile();
+                console.log('Upload queue created:', uploadQueue.length);
+                processNextFile();
+            } catch (error) {
+                console.error('Upload button click error:', error);
+                alert(`Upload failed to start: ${error.message}`);
+                uploadBtn.disabled = false;
+                isUploading = false;
+            }
         });
 
         function processNextFile() {

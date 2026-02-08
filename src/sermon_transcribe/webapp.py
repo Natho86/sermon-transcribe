@@ -1193,6 +1193,20 @@ def download(job_id: str, file_type: str):
         return jsonify({"error": "File not found"}), 404
 
 
+@app.route("/api/log-error", methods=["POST"])
+@auth.login_required
+def log_error():
+    """Log client-side JavaScript errors for debugging."""
+    data = request.get_json()
+    print(f"CLIENT ERROR from {request.remote_addr}:", flush=True)
+    print(f"  Message: {data.get('message')}", flush=True)
+    print(f"  User-Agent: {data.get('userAgent')}", flush=True)
+    print(f"  URL: {data.get('url')}", flush=True)
+    if data.get('stack'):
+        print(f"  Stack: {data.get('stack')}", flush=True)
+    return jsonify({"success": True})
+
+
 @app.route("/job/<job_id>/cancel", methods=["POST"])
 @auth.login_required
 def cancel_job(job_id: str):
