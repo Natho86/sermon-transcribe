@@ -6,6 +6,9 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="format-detection" content="telephone=no">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>Sermon Transcription Service</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎙️</text></svg>">
     <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎙️</text></svg>">
@@ -910,6 +913,19 @@
     </div>
 
     <script>
+        // iOS detection and chunked upload configuration
+        // MUST be at top of script before any functions that use them
+        const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
+        const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB chunks for iOS compatibility
+        const USE_CHUNKED_UPLOAD_THRESHOLD = 3 * 1024 * 1024; // Use chunked upload for files > 3MB on iOS (iOS buffer limit is ~3.5MB)
+
+        console.log('Device detection:', {
+            isIOS: isIOS,
+            userAgent: navigator.userAgent,
+            chunkSize: CHUNK_SIZE,
+            threshold: USE_CHUNKED_UPLOAD_THRESHOLD
+        });
+
         // Global error handler for debugging mobile issues
         window.addEventListener('error', function(e) {
             console.error('Global error:', e.error);
@@ -1026,14 +1042,13 @@
         // Load existing jobs when page loads
         loadExistingJobs();
 
-        // Detect iOS Chrome and show warning
-        const isIOSChrome = /CriOS/.test(navigator.userAgent) && /iPhone|iPad|iPod/.test(navigator.userAgent);
-        if (isIOSChrome) {
-            console.warn('iOS Chrome detected - large uploads may fail. Recommend using Safari on iOS.');
-            const warningDiv = document.createElement('div');
-            warningDiv.style.cssText = 'background: #ff9800; color: white; padding: 15px; margin: 20px 0; border-radius: 10px; text-align: center;';
-            warningDiv.innerHTML = '<strong>⚠️ iOS Chrome Detected</strong><br>For reliable large file uploads, please use <strong>Safari</strong> on iOS instead of Chrome.';
-            document.querySelector('.container').insertBefore(warningDiv, document.querySelector('.upload-area'));
+        // Show iOS info message
+        if (isIOS) {
+            console.log('iOS device detected - using chunked uploads for files > 5MB');
+            const infoDiv = document.createElement('div');
+            infoDiv.style.cssText = 'background: #2196F3; color: white; padding: 15px; margin: 20px 0; border-radius: 10px; text-align: center;';
+            infoDiv.innerHTML = '<strong>📱 iOS Device Detected</strong><br>Large files will be uploaded in small chunks for compatibility.';
+            document.querySelector('.container').insertBefore(infoDiv, document.querySelector('.upload-area'));
         }
 
         // Mode toggle handlers
@@ -1252,7 +1267,138 @@
             uploadFile(nextItem.file, nextItem.index);
         }
 
+        async function uploadFileChunked(file, index) {
+            const queueItem = queueList.querySelector(`[data-index="${index}"]`);
+            const statusEl = queueItem.querySelector('.queue-status');
+            const progressFill = queueItem.querySelector('.queue-progress-fill');
+            const messageEl = queueItem.querySelector('.queue-message');
+
+            queueItem.classList.add('uploading');
+            statusEl.className = 'queue-status uploading';
+            statusEl.textContent = 'Uploading';
+
+            console.log(`Starting chunked upload: ${file.name} (${formatBytes(file.size)})`);
+
+            const uploadId = generateUploadId();
+            const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+
+            console.log(`Upload ID: ${uploadId}, Total chunks: ${totalChunks}, Chunk size: ${formatBytes(CHUNK_SIZE)}`);
+
+            try {
+                // Upload chunks
+                for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+                    const start = chunkIndex * CHUNK_SIZE;
+                    const end = Math.min(start + CHUNK_SIZE, file.size);
+                    const chunk = file.slice(start, end);
+
+                    console.log(`Uploading chunk ${chunkIndex + 1}/${totalChunks}: ${formatBytes(start)} - ${formatBytes(end)}`);
+
+                    const formData = new FormData();
+                    formData.append('chunk', chunk, file.name);
+                    formData.append('upload_id', uploadId);
+                    formData.append('chunk_index', chunkIndex);
+                    formData.append('total_chunks', totalChunks);
+                    formData.append('filename', file.name);
+
+                    // Upload chunk with retries
+                    let retries = 3;
+                    let success = false;
+
+                    while (retries > 0 && !success) {
+                        try {
+                            const response = await fetch('/upload/chunk', {
+                                method: 'POST',
+                                body: formData
+                            });
+
+                            if (!response.ok) {
+                                throw new Error(`Chunk upload failed: ${response.status}`);
+                            }
+
+                            const data = await response.json();
+                            console.log(`Chunk ${chunkIndex + 1}/${totalChunks} uploaded:`, data.message);
+                            success = true;
+
+                            // Update progress
+                            const percentComplete = Math.round((end / file.size) * 100);
+                            progressFill.style.width = percentComplete + '%';
+                            messageEl.textContent = `Uploading: ${percentComplete}% (chunk ${chunkIndex + 1}/${totalChunks})`;
+
+                        } catch (error) {
+                            retries--;
+                            console.warn(`Chunk ${chunkIndex + 1} upload failed, retries left: ${retries}`, error);
+                            if (retries === 0) {
+                                throw error;
+                            }
+                            // Wait before retry
+                            await new Promise(resolve => setTimeout(resolve, 1000));
+                        }
+                    }
+                }
+
+                console.log('All chunks uploaded, starting transcription...');
+                messageEl.textContent = 'All chunks uploaded, starting processing...';
+
+                // Start transcription
+                const startResponse = await fetch('/upload/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        upload_id: uploadId,
+                        cleanup: cleanupCheckbox.checked,
+                        convert_m4a: uploadMode === 'audio' ? convertM4aCheckbox.checked : false,
+                        convert_flac: uploadMode === 'audio' ? convertFlacCheckbox.checked : false,
+                        language: uploadMode === 'audio' ? languageSelect.value : ''
+                    })
+                });
+
+                if (!startResponse.ok) {
+                    throw new Error('Failed to start transcription');
+                }
+
+                const data = await startResponse.json();
+                console.log('Transcription started:', data);
+
+                jobs[data.job_id] = {
+                    job_id: data.job_id,
+                    filename: file.name,
+                    status: 'queued',
+                    progress: 0,
+                    message: 'Uploaded successfully'
+                };
+                renderJobs();
+
+                queueItem.classList.remove('uploading');
+                queueItem.classList.add('completed');
+                statusEl.className = 'queue-status completed';
+                statusEl.textContent = 'Completed';
+                progressFill.style.width = '100%';
+                messageEl.textContent = 'Upload complete - Processing...';
+
+                const queueItemObj = uploadQueue.find(item => item.index === index);
+                if (queueItemObj) queueItemObj.status = 'completed';
+
+                // Process next file
+                setTimeout(() => processNextFile(), 500);
+
+            } catch (error) {
+                console.error('Chunked upload failed:', error);
+                handleUploadError(index, `Upload failed: ${error.message}`);
+            }
+        }
+
+        function generateUploadId() {
+            return 'upload_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        }
+
         function uploadFile(file, index) {
+            // Use chunked upload for large files on iOS or all files in transcript mode on iOS
+            if (isIOS && file.size > USE_CHUNKED_UPLOAD_THRESHOLD) {
+                console.log(`Using chunked upload for ${file.name} (iOS device, file size: ${formatBytes(file.size)})`);
+                return uploadFileChunked(file, index);
+            }
+
+            // Standard upload for small files or desktop browsers
             const queueItem = queueList.querySelector(`[data-index="${index}"]`);
             const statusEl = queueItem.querySelector('.queue-status');
             const progressFill = queueItem.querySelector('.queue-progress-fill');

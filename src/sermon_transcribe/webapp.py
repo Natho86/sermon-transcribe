@@ -13,6 +13,7 @@ from flask import Flask, jsonify, render_template, request, send_file
 from flask_socketio import SocketIO, emit
 from flask_httpauth import HTTPBasicAuth
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
 
 from sermon_transcribe.cleanup import (
     apply_disclaimer,
@@ -529,7 +530,12 @@ def cleanup_transcript(job_id: str, result: TranscriptionResult, output_dir: Pat
 @auth.login_required
 def index():
     """Main upload page."""
-    return render_template("index.html")
+    response = app.make_response(render_template("index.html"))
+    # Prevent browser caching to ensure users always get latest version
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 @app.route("/review/<job_id>")
@@ -807,6 +813,286 @@ def get_segments(job_id: str):
         return jsonify({"error": f"Failed to load segments: {str(e)}"}), 500
 
 
+# Track chunked uploads
+chunked_uploads: Dict[str, dict] = {}
+chunked_uploads_lock = threading.Lock()
+
+# Cleanup configuration
+CHUNKED_UPLOAD_TIMEOUT = 30 * 60  # 30 minutes in seconds
+
+
+def cleanup_stale_uploads():
+    """Background task to clean up abandoned chunked uploads."""
+    while True:
+        try:
+            time.sleep(5 * 60)  # Run cleanup every 5 minutes
+
+            current_time = datetime.utcnow()
+            stale_uploads = []
+
+            with chunked_uploads_lock:
+                for upload_id, upload_info in chunked_uploads.items():
+                    age_seconds = (current_time - upload_info["created_at"]).total_seconds()
+
+                    # Mark as stale if:
+                    # 1. Older than timeout AND not complete
+                    # 2. Not currently being assembled
+                    if age_seconds > CHUNKED_UPLOAD_TIMEOUT:
+                        chunks_received = len(upload_info["received_chunks"])
+                        total_chunks = upload_info["total_chunks"]
+
+                        if chunks_received < total_chunks and not upload_info.get("assembling"):
+                            stale_uploads.append(upload_id)
+
+            # Clean up stale uploads outside the lock
+            for upload_id in stale_uploads:
+                with chunked_uploads_lock:
+                    upload_info = chunked_uploads.get(upload_id)
+                    if not upload_info:
+                        continue
+
+                    print(f"Cleaning up stale upload: {upload_id} (age: {age_seconds/60:.1f} min, chunks: {len(upload_info['received_chunks'])}/{upload_info['total_chunks']})", flush=True)
+
+                    # Delete partial chunk files
+                    try:
+                        for i in range(upload_info["total_chunks"]):
+                            chunk_path = upload_info["audio_path"].with_suffix(f".part{i}")
+                            if chunk_path.exists():
+                                chunk_path.unlink()
+                    except Exception as e:
+                        print(f"Error cleaning up chunks for {upload_id}: {e}", flush=True)
+
+                    # Remove from tracking
+                    del chunked_uploads[upload_id]
+
+        except Exception as e:
+            print(f"Error in cleanup_stale_uploads: {e}", flush=True)
+
+
+@app.route("/upload/chunk", methods=["POST"])
+@auth.login_required
+def upload_chunk():
+    """Handle chunked file upload."""
+    if "chunk" not in request.files:
+        return jsonify({"error": "No chunk provided"}), 400
+
+    chunk = request.files["chunk"]
+    upload_id = request.form.get("upload_id")
+
+    # Validate upload_id format (should be alphanumeric with underscores)
+    if not upload_id or not upload_id.replace("_", "").isalnum():
+        return jsonify({"error": "Invalid upload_id"}), 400
+
+    # Parse and validate chunk parameters
+    try:
+        chunk_index = int(request.form.get("chunk_index", 0))
+        total_chunks = int(request.form.get("total_chunks", 1))
+    except ValueError:
+        return jsonify({"error": "Invalid chunk parameters"}), 400
+
+    # Validate chunk index and total chunks
+    if chunk_index < 0 or total_chunks <= 0:
+        return jsonify({"error": "Invalid chunk index or total chunks"}), 400
+
+    if chunk_index >= total_chunks:
+        return jsonify({"error": "Chunk index exceeds total chunks"}), 400
+
+    # Prevent DoS with excessive chunks (limit to 10,000 chunks = ~20GB file at 2MB/chunk)
+    if total_chunks > 10000:
+        return jsonify({"error": "File too large (too many chunks)"}), 400
+
+    # Sanitize filename to prevent path traversal attacks
+    raw_filename = request.form.get("filename", "audio.wav")
+    filename = secure_filename(raw_filename)
+
+    if not filename:
+        # If secure_filename returns empty (e.g., filename was "../../../etc/passwd"), use default
+        filename = "audio.wav"
+
+    print(f"Chunk upload: upload_id={upload_id}, chunk {chunk_index + 1}/{total_chunks}, filename={filename}", flush=True)
+
+    # Initialize chunked upload tracking
+    with chunked_uploads_lock:
+        if upload_id not in chunked_uploads:
+            upload_path = app.config["UPLOAD_FOLDER"] / upload_id
+            ensure_dir(upload_path)
+            audio_path = upload_path / filename
+
+            chunked_uploads[upload_id] = {
+                "filename": filename,
+                "audio_path": audio_path,
+                "total_chunks": total_chunks,
+                "received_chunks": set(),
+                "created_at": datetime.utcnow(),
+                "assembling": False,  # Prevent race condition
+            }
+
+        upload_info = chunked_uploads[upload_id]
+
+        # Validate chunk isn't already received (prevent duplicate uploads)
+        if chunk_index in upload_info["received_chunks"]:
+            print(f"Chunk {chunk_index} already received for {upload_id}, ignoring duplicate", flush=True)
+            chunks_received = len(upload_info["received_chunks"])
+            return jsonify({
+                "status": "duplicate",
+                "upload_id": upload_id,
+                "chunks_received": chunks_received,
+                "total_chunks": total_chunks,
+                "message": f"Chunk {chunk_index + 1} already received"
+            })
+
+        # Save chunk to temporary file
+        chunk_path = upload_info["audio_path"].with_suffix(f".part{chunk_index}")
+        chunk.save(str(chunk_path))
+        upload_info["received_chunks"].add(chunk_index)
+
+        chunks_received = len(upload_info["received_chunks"])
+        print(f"Chunk saved: {chunk_path.name}, received {chunks_received}/{total_chunks}", flush=True)
+
+        # Check if all chunks received
+        if chunks_received == total_chunks:
+            # Prevent duplicate assembly attempts (race condition)
+            if upload_info["assembling"]:
+                print(f"Upload {upload_id} already being assembled by another request", flush=True)
+                return jsonify({
+                    "status": "assembling",
+                    "upload_id": upload_id,
+                    "message": "File is being assembled"
+                }), 202  # 202 Accepted
+
+            upload_info["assembling"] = True
+            print(f"All chunks received for {upload_id}, assembling file...", flush=True)
+
+    # Perform assembly outside the lock (slow I/O operation)
+    try:
+        with open(upload_info["audio_path"], "wb") as output_file:
+            for i in range(total_chunks):
+                chunk_path = upload_info["audio_path"].with_suffix(f".part{i}")
+                if not chunk_path.exists():
+                    raise FileNotFoundError(f"Chunk {i} missing during assembly")
+
+                # Stream copy to avoid loading entire chunk into memory
+                with open(chunk_path, "rb") as chunk_file:
+                    shutil.copyfileobj(chunk_file, output_file, length=1024*1024)  # 1MB buffer
+
+                # Delete chunk file after appending
+                chunk_path.unlink()
+
+        file_size = upload_info["audio_path"].stat().st_size
+        print(f"File assembled successfully: {filename} ({file_size} bytes)", flush=True)
+
+        return jsonify({
+            "status": "complete",
+            "upload_id": upload_id,
+            "chunks_received": chunks_received,
+            "total_chunks": total_chunks,
+            "message": "All chunks received, file assembled"
+        })
+
+    except Exception as e:
+        print(f"Error assembling chunks for {upload_id}: {e}", flush=True)
+
+        # Clean up partial files
+        try:
+            if upload_info["audio_path"].exists():
+                upload_info["audio_path"].unlink()
+        except:
+            pass
+
+        for i in range(total_chunks):
+            chunk_path = upload_info["audio_path"].with_suffix(f".part{i}")
+            try:
+                if chunk_path.exists():
+                    chunk_path.unlink()
+            except:
+                pass
+
+        # Mark as not assembling so client can retry
+        with chunked_uploads_lock:
+            if upload_id in chunked_uploads:
+                chunked_uploads[upload_id]["assembling"] = False
+
+        return jsonify({"error": f"Failed to assemble file: {str(e)}"}), 500
+
+    # Return status for incomplete upload
+    return jsonify({
+        "status": "receiving",
+        "upload_id": upload_id,
+        "chunks_received": chunks_received,
+        "total_chunks": total_chunks,
+        "message": f"Chunk {chunk_index + 1}/{total_chunks} received"
+    })
+
+
+@app.route("/upload/start", methods=["POST"])
+@auth.login_required
+def start_transcription():
+    """Start transcription after chunked upload completes."""
+    data = request.get_json()
+    upload_id = data.get("upload_id")
+
+    if not upload_id:
+        return jsonify({"error": "No upload_id provided"}), 400
+
+    with chunked_uploads_lock:
+        upload_info = chunked_uploads.get(upload_id)
+
+    if not upload_info:
+        return jsonify({"error": "Upload not found"}), 404
+
+    if len(upload_info["received_chunks"]) != upload_info["total_chunks"]:
+        return jsonify({"error": "Upload incomplete"}), 400
+
+    # Get transcription options
+    do_cleanup = data.get("cleanup", False)
+    convert_m4a = data.get("convert_m4a", False)
+    convert_flac = data.get("convert_flac", False)
+    language = data.get("language", "")
+
+    if language in ("", "auto", "none"):
+        language = None
+
+    # Use upload_id as job_id
+    job_id = upload_id
+    audio_path = upload_info["audio_path"]
+    filename = upload_info["filename"]
+
+    print(f"Starting transcription for upload_id={upload_id}, file={filename}", flush=True)
+
+    # Create output directory
+    output_dir = app.config["OUTPUT_FOLDER"] / job_id
+    ensure_dir(output_dir)
+
+    # Initialize job
+    with jobs_lock:
+        jobs[job_id] = {
+            "job_id": job_id,
+            "filename": filename,
+            "status": "queued",
+            "progress": 0,
+            "message": "Job queued",
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat(),
+            "cleanup": do_cleanup,
+            "language": language or config.language,
+        }
+
+    # Start background processing
+    thread = threading.Thread(
+        target=process_transcription,
+        args=(job_id, audio_path, output_dir, do_cleanup, convert_m4a, convert_flac, language),
+        daemon=True,
+    )
+    thread.start()
+
+    # Clean up chunked upload tracking
+    with chunked_uploads_lock:
+        del chunked_uploads[upload_id]
+
+    print(f"Transcription started: job_id={job_id}", flush=True)
+    return jsonify({"job_id": job_id, "status": "queued"})
+
+
 @app.route("/upload", methods=["POST"])
 @auth.login_required
 def upload():
@@ -843,7 +1129,10 @@ def upload():
     upload_path = app.config["UPLOAD_FOLDER"] / job_id
     ensure_dir(upload_path)
 
-    audio_filename = Path(file.filename).name
+    # Sanitize filename to prevent path traversal attacks
+    audio_filename = secure_filename(file.filename) if file.filename else "audio.wav"
+    if not audio_filename:
+        audio_filename = "audio.wav"
     audio_path = upload_path / audio_filename
 
     print(f"Saving file to: {audio_path}", flush=True)
@@ -974,8 +1263,11 @@ def upload_transcript():
     if not transcript_content:
         return jsonify({"error": "Transcript file is empty"}), 400
 
-    # Save raw transcript
-    transcript_filename = Path(file.filename).stem
+    # Save raw transcript - sanitize filename to prevent path traversal
+    safe_filename = secure_filename(file.filename) if file.filename else "transcript.txt"
+    if not safe_filename:
+        safe_filename = "transcript.txt"
+    transcript_filename = Path(safe_filename).stem
     raw_suffix = "_timestamps" if do_cleanup else ""
     text_path = output_dir / f"{transcript_filename}{raw_suffix}.txt"
     text_path.write_text(transcript_content, encoding="utf-8")
@@ -1399,6 +1691,11 @@ def main():
 
     print("Initializing transcription model...", flush=True)
     init_model()
+
+    # Start background cleanup thread for stale chunked uploads
+    print("Starting chunked upload cleanup thread...", flush=True)
+    cleanup_thread = threading.Thread(target=cleanup_stale_uploads, daemon=True)
+    cleanup_thread.start()
 
     host = os.environ.get("FLASK_HOST", "0.0.0.0")
     port = int(os.environ.get("FLASK_PORT", "5000"))
