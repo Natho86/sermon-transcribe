@@ -943,8 +943,12 @@ def upload_chunk():
 
         # Save chunk to temporary file
         chunk_path = upload_info["audio_path"].with_suffix(f".part{chunk_index}")
-        chunk.save(str(chunk_path))
-        upload_info["received_chunks"].add(chunk_index)
+        try:
+            chunk.save(str(chunk_path))
+            upload_info["received_chunks"].add(chunk_index)
+        except Exception as e:
+            print(f"Error saving chunk {chunk_index} for {upload_id}: {e}", flush=True)
+            return jsonify({"error": f"Failed to save chunk: {str(e)}"}), 500
 
         chunks_received = len(upload_info["received_chunks"])
         print(f"Chunk saved: {chunk_path.name}, received {chunks_received}/{total_chunks}", flush=True)
@@ -963,11 +967,25 @@ def upload_chunk():
             upload_info["assembling"] = True
             print(f"All chunks received for {upload_id}, assembling file...", flush=True)
 
+            # Copy path info before releasing lock for assembly
+            audio_path = upload_info["audio_path"]
+            assembly_total_chunks = total_chunks
+        else:
+            # Return status for incomplete upload
+            return jsonify({
+                "status": "receiving",
+                "upload_id": upload_id,
+                "chunks_received": chunks_received,
+                "total_chunks": total_chunks,
+                "message": f"Chunk {chunk_index + 1}/{total_chunks} received"
+            })
+
     # Perform assembly outside the lock (slow I/O operation)
+    # Only reaches here if chunks_received == total_chunks
     try:
-        with open(upload_info["audio_path"], "wb") as output_file:
-            for i in range(total_chunks):
-                chunk_path = upload_info["audio_path"].with_suffix(f".part{i}")
+        with open(audio_path, "wb") as output_file:
+            for i in range(assembly_total_chunks):
+                chunk_path = audio_path.with_suffix(f".part{i}")
                 if not chunk_path.exists():
                     raise FileNotFoundError(f"Chunk {i} missing during assembly")
 
@@ -978,14 +996,14 @@ def upload_chunk():
                 # Delete chunk file after appending
                 chunk_path.unlink()
 
-        file_size = upload_info["audio_path"].stat().st_size
+        file_size = audio_path.stat().st_size
         print(f"File assembled successfully: {filename} ({file_size} bytes)", flush=True)
 
         return jsonify({
             "status": "complete",
             "upload_id": upload_id,
             "chunks_received": chunks_received,
-            "total_chunks": total_chunks,
+            "total_chunks": assembly_total_chunks,
             "message": "All chunks received, file assembled"
         })
 
@@ -994,13 +1012,13 @@ def upload_chunk():
 
         # Clean up partial files
         try:
-            if upload_info["audio_path"].exists():
-                upload_info["audio_path"].unlink()
+            if audio_path.exists():
+                audio_path.unlink()
         except:
             pass
 
-        for i in range(total_chunks):
-            chunk_path = upload_info["audio_path"].with_suffix(f".part{i}")
+        for i in range(assembly_total_chunks):
+            chunk_path = audio_path.with_suffix(f".part{i}")
             try:
                 if chunk_path.exists():
                     chunk_path.unlink()
@@ -1013,15 +1031,6 @@ def upload_chunk():
                 chunked_uploads[upload_id]["assembling"] = False
 
         return jsonify({"error": f"Failed to assemble file: {str(e)}"}), 500
-
-    # Return status for incomplete upload
-    return jsonify({
-        "status": "receiving",
-        "upload_id": upload_id,
-        "chunks_received": chunks_received,
-        "total_chunks": total_chunks,
-        "message": f"Chunk {chunk_index + 1}/{total_chunks} received"
-    })
 
 
 @app.route("/upload/start", methods=["POST"])
