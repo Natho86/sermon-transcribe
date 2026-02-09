@@ -429,6 +429,7 @@
         .actions-dropdown {
             position: relative;
             display: inline-block;
+            width: 100%;
         }
 
         .actions-dropdown-btn {
@@ -442,8 +443,10 @@
             font-weight: 600;
             display: flex;
             align-items: center;
+            justify-content: center;
             gap: 8px;
             transition: background 0.3s;
+            width: 100%;
         }
 
         .actions-dropdown-btn:hover {
@@ -453,11 +456,11 @@
         .actions-dropdown-content {
             display: none;
             position: absolute;
+            left: 0;
             right: 0;
             top: 100%;
             margin-top: 5px;
             background: white;
-            min-width: 200px;
             box-shadow: 0 8px 16px rgba(0,0,0,0.2);
             border-radius: 8px;
             z-index: 1000;
@@ -506,9 +509,18 @@
                 text-align: center;
             }
 
+            .actions-dropdown {
+                width: 100%;
+            }
+
             .actions-dropdown-content {
-                min-width: 250px;
-                max-width: 90vw;
+                left: 0;
+                right: 0;
+                max-width: 100%;
+            }
+
+            .job-actions {
+                width: 100%;
             }
         }
 
