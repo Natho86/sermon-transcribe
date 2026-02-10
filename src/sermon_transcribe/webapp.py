@@ -9,11 +9,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
 
-from flask import Flask, jsonify, render_template, request, send_file
+from flask import Flask, jsonify, render_template, request, send_file, redirect, url_for, session
 from flask_socketio import SocketIO, emit
-from flask_httpauth import HTTPBasicAuth
+from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
+from urllib.parse import urlparse, urljoin
 
 from sermon_transcribe.cleanup import (
     apply_disclaimer,
@@ -39,9 +40,16 @@ app.config["MAX_CONTENT_LENGTH"] = 4 * 1024 * 1024 * 1024  # 4GB max file size
 app.config["UPLOAD_FOLDER"] = Path("/app/uploads").resolve()
 app.config["OUTPUT_FOLDER"] = Path("/app/output").resolve()
 app.config["MODEL_CACHE"] = Path("/app/model_cache").resolve()
+app.config["SESSION_COOKIE_SECURE"] = False  # Set to True in production with HTTPS
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["PERMANENT_SESSION_LIFETIME"] = 3600  # 1 hour session timeout
 
-# Setup HTTP Basic Authentication
-auth = HTTPBasicAuth()
+# Setup Flask-Login
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = "login"
+login_manager.login_message = "Please log in to access this page."
 
 # User credentials from environment variables
 users = {}
@@ -56,15 +64,35 @@ else:
     print("Warning: No authentication configured (AUTH_USERNAME and AUTH_PASSWORD not set)", flush=True)
     print("Application is running in OPEN ACCESS mode - not suitable for public deployment!", flush=True)
 
-@auth.verify_password
-def verify_password(username, password):
-    """Verify username and password for basic auth."""
-    if not users:
-        # If no users configured, allow access (for backward compatibility)
-        return True
-    if username in users and check_password_hash(users[username], password):
-        return username
+
+# Simple User class for Flask-Login
+class User(UserMixin):
+    def __init__(self, username):
+        self.id = username
+        self.username = username
+
+
+@login_manager.user_loader
+def load_user(user_id):
+    """Load user from session."""
+    if user_id in users or not users:
+        return User(user_id)
     return None
+
+
+@login_manager.unauthorized_handler
+def unauthorized():
+    """Redirect unauthorized users to login page."""
+    return redirect(url_for("login"))
+
+
+def is_safe_url(target):
+    """Check if a redirect target URL is safe (prevents open redirects)."""
+    if not target:
+        return False
+    ref_url = urlparse(request.host_url)
+    test_url = urlparse(urljoin(request.host_url, target))
+    return test_url.scheme in ('http', 'https') and ref_url.netloc == test_url.netloc
 
 socketio = SocketIO(
     app,
@@ -83,6 +111,10 @@ cancelled_lock = threading.Lock()
 
 # Processing semaphore - ensures only one transcription runs at a time
 processing_semaphore = threading.Semaphore(1)
+
+# Login attempt tracking for rate limiting (simple in-memory tracking)
+login_attempts = {}
+login_attempts_lock = threading.Lock()
 
 # Model instance (loaded once at startup)
 model = None
@@ -526,8 +558,85 @@ def cleanup_transcript(job_id: str, result: TranscriptionResult, output_dir: Pat
     emit_progress(job_id, "processing", 90, "Cleanup complete")
 
 
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    """Handle user login with rate limiting."""
+    if current_user.is_authenticated:
+        return redirect(url_for("index"))
+
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+
+        # Get client IP for rate limiting
+        client_ip = request.headers.get("X-Forwarded-For", request.remote_addr)
+        if client_ip:
+            client_ip = client_ip.split(",")[0].strip()
+
+        # Rate limiting: max 5 failed attempts per IP within 15 minutes
+        with login_attempts_lock:
+            now = time.time()
+            if client_ip in login_attempts:
+                attempts = login_attempts[client_ip]
+                # Clean old attempts (older than 15 minutes)
+                attempts = [t for t in attempts if now - t < 900]
+
+                if len(attempts) >= 5:
+                    return render_template("login.html",
+                        error="Too many failed login attempts. Please try again in 15 minutes."), 429
+
+                login_attempts[client_ip] = attempts
+            else:
+                login_attempts[client_ip] = []
+
+        # If no users configured, allow any login (backward compatibility)
+        if not users:
+            user = User(username if username else "anonymous")
+            login_user(user)
+            # Clear rate limit on successful login
+            with login_attempts_lock:
+                if client_ip in login_attempts:
+                    login_attempts[client_ip] = []
+            next_page = request.args.get("next")
+            if next_page and is_safe_url(next_page):
+                return redirect(next_page)
+            return redirect(url_for("index"))
+
+        # Validate credentials
+        if username in users and check_password_hash(users[username], password):
+            user = User(username)
+            login_user(user)
+            # Clear rate limit on successful login
+            with login_attempts_lock:
+                if client_ip in login_attempts:
+                    login_attempts[client_ip] = []
+            next_page = request.args.get("next")
+            if next_page and is_safe_url(next_page):
+                return redirect(next_page)
+            return redirect(url_for("index"))
+        else:
+            # Record failed attempt
+            with login_attempts_lock:
+                if client_ip in login_attempts:
+                    login_attempts[client_ip].append(now)
+                else:
+                    login_attempts[client_ip] = [now]
+
+            return render_template("login.html", error="Invalid username or password")
+
+    return render_template("login.html")
+
+
+@app.route("/logout")
+@login_required
+def logout():
+    """Handle user logout."""
+    logout_user()
+    return redirect(url_for("login"))
+
+
 @app.route("/")
-@auth.login_required
+@login_required
 def index():
     """Main upload page."""
     response = app.make_response(render_template("index.html"))
@@ -539,7 +648,7 @@ def index():
 
 
 @app.route("/review/<job_id>")
-@auth.login_required
+@login_required
 def review(job_id: str):
     """Review page for editing transcript."""
     with jobs_lock:
@@ -555,7 +664,7 @@ def review(job_id: str):
 
 
 @app.route("/api/transcript/<job_id>", methods=["GET"])
-@auth.login_required
+@login_required
 def get_transcript(job_id: str):
     """Get transcript content."""
     with jobs_lock:
@@ -589,7 +698,7 @@ def get_transcript(job_id: str):
 
 
 @app.route("/api/transcript/<job_id>", methods=["POST"])
-@auth.login_required
+@login_required
 def save_transcript(job_id: str):
     """Save edited transcript."""
     with jobs_lock:
@@ -623,7 +732,7 @@ def save_transcript(job_id: str):
 
 
 @app.route("/api/transcript/<job_id>/reload", methods=["POST"])
-@auth.login_required
+@login_required
 def reload_transcript(job_id: str):
     """Reload transcript from backup."""
     with jobs_lock:
@@ -651,7 +760,7 @@ def reload_transcript(job_id: str):
 
 
 @app.route("/api/transcript/<job_id>/regenerate", methods=["POST"])
-@auth.login_required
+@login_required
 def regenerate_cleaned_transcript(job_id: str):
     """Regenerate cleaned transcript and summary from current transcript content."""
     with jobs_lock:
@@ -758,7 +867,7 @@ def regenerate_cleaned_transcript(job_id: str):
 
 
 @app.route("/api/audio/<job_id>")
-@auth.login_required
+@login_required
 def stream_audio(job_id: str):
     """Stream audio file."""
     with jobs_lock:
@@ -782,7 +891,7 @@ def stream_audio(job_id: str):
 
 
 @app.route("/api/segments/<job_id>")
-@auth.login_required
+@login_required
 def get_segments(job_id: str):
     """Get transcript segments with timestamps."""
     with jobs_lock:
@@ -870,7 +979,7 @@ def cleanup_stale_uploads():
 
 
 @app.route("/upload/chunk", methods=["POST"])
-@auth.login_required
+@login_required
 def upload_chunk():
     """Handle chunked file upload."""
     if "chunk" not in request.files:
@@ -1034,7 +1143,7 @@ def upload_chunk():
 
 
 @app.route("/upload/start", methods=["POST"])
-@auth.login_required
+@login_required
 def start_transcription():
     """Start transcription after chunked upload completes."""
     data = request.get_json()
@@ -1103,7 +1212,7 @@ def start_transcription():
 
 
 @app.route("/upload", methods=["POST"])
-@auth.login_required
+@login_required
 def upload():
     """Handle file upload and start transcription."""
     print(f"Upload request received from {request.remote_addr}", flush=True)
@@ -1180,7 +1289,7 @@ def upload():
 
 
 @app.route("/api/retranscribe/<job_id>", methods=["POST"])
-@auth.login_required
+@login_required
 def retranscribe(job_id: str):
     """Re-transcribe an existing job with optional new language setting."""
     with jobs_lock:
@@ -1244,7 +1353,7 @@ def retranscribe(job_id: str):
 
 
 @app.route("/upload-transcript", methods=["POST"])
-@auth.login_required
+@login_required
 def upload_transcript():
     """Handle raw transcript upload and optionally process with Claude."""
     if "transcript" not in request.files:
@@ -1392,7 +1501,7 @@ def upload_transcript():
 
 
 @app.route("/status/<job_id>")
-@auth.login_required
+@login_required
 def status(job_id: str):
     """Get job status."""
     with jobs_lock:
@@ -1405,7 +1514,7 @@ def status(job_id: str):
 
 
 @app.route("/jobs")
-@auth.login_required
+@login_required
 def list_jobs():
     """List all jobs."""
     with jobs_lock:
@@ -1418,7 +1527,7 @@ def list_jobs():
 
 
 @app.route("/download/<job_id>/<file_type>")
-@auth.login_required
+@login_required
 def download(job_id: str, file_type: str):
     """Download transcription results."""
     with jobs_lock:
@@ -1495,7 +1604,7 @@ def download(job_id: str, file_type: str):
 
 
 @app.route("/api/log-error", methods=["POST"])
-@auth.login_required
+@login_required
 def log_error():
     """Log client-side JavaScript errors for debugging."""
     data = request.get_json()
@@ -1509,7 +1618,7 @@ def log_error():
 
 
 @app.route("/job/<job_id>/cancel", methods=["POST"])
-@auth.login_required
+@login_required
 def cancel_job(job_id: str):
     """Cancel a running or queued job."""
     with jobs_lock:
@@ -1532,7 +1641,7 @@ def cancel_job(job_id: str):
 
 
 @app.route("/job/<job_id>", methods=["DELETE"])
-@auth.login_required
+@login_required
 def delete_job(job_id: str):
     """Delete a job and all its associated files."""
     with jobs_lock:

@@ -23,7 +23,7 @@ RUN python3 -m pip install --no-cache-dir --upgrade pip \
     flask-socketio \
     python-socketio \
     eventlet \
-    flask-httpauth \
+    flask-login \
     werkzeug
 
 COPY src /app/src
@@ -34,7 +34,8 @@ RUN mkdir -p /app/uploads /app/output /app/model_cache
 
 # Verify templates are present (will fail build if missing)
 RUN test -f /app/src/sermon_transcribe/templates/index.html && \
-    test -f /app/src/sermon_transcribe/templates/review.html
+    test -f /app/src/sermon_transcribe/templates/review.html && \
+    test -f /app/src/sermon_transcribe/templates/login.html
 
 # Expose port for web interface
 EXPOSE 5000
