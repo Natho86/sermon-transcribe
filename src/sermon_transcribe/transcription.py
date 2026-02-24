@@ -9,7 +9,7 @@ from typing import Iterable, List, Optional, Tuple
 import ctranslate2
 from faster_whisper import WhisperModel
 
-from sermon_transcribe.io_utils import ensure_dir, readable_path
+from sermon_transcribe.io_utils import ensure_dir, readable_path, unique_path
 
 
 @dataclass

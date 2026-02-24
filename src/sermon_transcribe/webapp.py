@@ -215,7 +215,7 @@ def convert_audio(job_id: str, audio_path: Path, output_dir: Path, convert_m4a: 
                 json_str = '\n'.join(output_lines[json_start:])
                 try:
                     loudnorm_stats = json.loads(json_str)
-                except:
+                except json.JSONDecodeError:
                     pass
 
             # Second pass: apply normalization with analyzed parameters
@@ -285,7 +285,7 @@ def convert_audio(job_id: str, audio_path: Path, output_dir: Path, convert_m4a: 
                 json_str = '\n'.join(output_lines[json_start:])
                 try:
                     loudnorm_stats = json.loads(json_str)
-                except:
+                except json.JSONDecodeError:
                     pass
 
             emit_progress(job_id, "processing", 58, "Converting to FLAC (normalizing and encoding)...")
@@ -1018,8 +1018,6 @@ def upload_chunk():
         # If secure_filename returns empty (e.g., filename was "../../../etc/passwd"), use default
         filename = "audio.wav"
 
-    print(f"Chunk upload: upload_id={upload_id}, chunk {chunk_index + 1}/{total_chunks}, filename={filename}", flush=True)
-
     # Initialize chunked upload tracking
     with chunked_uploads_lock:
         if upload_id not in chunked_uploads:
@@ -1040,7 +1038,6 @@ def upload_chunk():
 
         # Validate chunk isn't already received (prevent duplicate uploads)
         if chunk_index in upload_info["received_chunks"]:
-            print(f"Chunk {chunk_index} already received for {upload_id}, ignoring duplicate", flush=True)
             chunks_received = len(upload_info["received_chunks"])
             return jsonify({
                 "status": "duplicate",
@@ -1056,17 +1053,14 @@ def upload_chunk():
             chunk.save(str(chunk_path))
             upload_info["received_chunks"].add(chunk_index)
         except Exception as e:
-            print(f"Error saving chunk {chunk_index} for {upload_id}: {e}", flush=True)
             return jsonify({"error": f"Failed to save chunk: {str(e)}"}), 500
 
         chunks_received = len(upload_info["received_chunks"])
-        print(f"Chunk saved: {chunk_path.name}, received {chunks_received}/{total_chunks}", flush=True)
 
         # Check if all chunks received
         if chunks_received == total_chunks:
             # Prevent duplicate assembly attempts (race condition)
             if upload_info["assembling"]:
-                print(f"Upload {upload_id} already being assembled by another request", flush=True)
                 return jsonify({
                     "status": "assembling",
                     "upload_id": upload_id,
@@ -1074,7 +1068,6 @@ def upload_chunk():
                 }), 202  # 202 Accepted
 
             upload_info["assembling"] = True
-            print(f"All chunks received for {upload_id}, assembling file...", flush=True)
 
             # Copy path info before releasing lock for assembly
             audio_path = upload_info["audio_path"]
@@ -1105,9 +1098,6 @@ def upload_chunk():
                 # Delete chunk file after appending
                 chunk_path.unlink()
 
-        file_size = audio_path.stat().st_size
-        print(f"File assembled successfully: {filename} ({file_size} bytes)", flush=True)
-
         return jsonify({
             "status": "complete",
             "upload_id": upload_id,
@@ -1117,8 +1107,6 @@ def upload_chunk():
         })
 
     except Exception as e:
-        print(f"Error assembling chunks for {upload_id}: {e}", flush=True)
-
         # Clean up partial files
         try:
             if audio_path.exists():
@@ -1175,8 +1163,6 @@ def start_transcription():
     audio_path = upload_info["audio_path"]
     filename = upload_info["filename"]
 
-    print(f"Starting transcription for upload_id={upload_id}, file={filename}", flush=True)
-
     # Create output directory
     output_dir = app.config["OUTPUT_FOLDER"] / job_id
     ensure_dir(output_dir)
@@ -1207,7 +1193,6 @@ def start_transcription():
     with chunked_uploads_lock:
         del chunked_uploads[upload_id]
 
-    print(f"Transcription started: job_id={job_id}", flush=True)
     return jsonify({"job_id": job_id, "status": "queued"})
 
 
@@ -1215,19 +1200,12 @@ def start_transcription():
 @login_required
 def upload():
     """Handle file upload and start transcription."""
-    print(f"Upload request received from {request.remote_addr}", flush=True)
-    print(f"Request headers: User-Agent={request.headers.get('User-Agent')}", flush=True)
-
     if "audio" not in request.files:
-        print("Error: No audio file in request", flush=True)
         return jsonify({"error": "No file provided"}), 400
 
     file = request.files["audio"]
     if file.filename == "":
-        print("Error: Empty filename", flush=True)
         return jsonify({"error": "No file selected"}), 400
-
-    print(f"Receiving file: {file.filename}, content_length={request.content_length}", flush=True)
 
     do_cleanup = request.form.get("cleanup", "false").lower() == "true"
     convert_m4a = request.form.get("convert_m4a", "false").lower() == "true"
@@ -1240,7 +1218,6 @@ def upload():
 
     # Generate job ID
     job_id = secrets.token_hex(16)
-    print(f"Generated job_id: {job_id}", flush=True)
 
     # Save uploaded file
     ensure_dir(app.config["UPLOAD_FOLDER"])
@@ -1253,10 +1230,7 @@ def upload():
         audio_filename = "audio.wav"
     audio_path = upload_path / audio_filename
 
-    print(f"Saving file to: {audio_path}", flush=True)
     file.save(str(audio_path))
-    file_size = audio_path.stat().st_size
-    print(f"File saved successfully: {audio_filename} ({file_size} bytes)", flush=True)
 
     # Create output directory
     output_dir = app.config["OUTPUT_FOLDER"] / job_id
@@ -1284,7 +1258,6 @@ def upload():
     )
     thread.start()
 
-    print(f"Upload complete: job_id={job_id}, returning response", flush=True)
     return jsonify({"job_id": job_id, "status": "queued"})
 
 

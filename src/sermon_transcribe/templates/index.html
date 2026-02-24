@@ -1019,13 +1019,6 @@
         const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB chunks for iOS compatibility
         const USE_CHUNKED_UPLOAD_THRESHOLD = 3 * 1024 * 1024; // Use chunked upload for files > 3MB on iOS (iOS buffer limit is ~3.5MB)
 
-        console.log('Device detection:', {
-            isIOS: isIOS,
-            userAgent: navigator.userAgent,
-            chunkSize: CHUNK_SIZE,
-            threshold: USE_CHUNKED_UPLOAD_THRESHOLD
-        });
-
         // Global error handler for debugging mobile issues
         window.addEventListener('error', function(e) {
             console.error('Global error:', e.error);
@@ -1073,8 +1066,6 @@
         const convertM4aCheckbox = document.getElementById('convertM4aCheckbox');
         const convertFlacCheckbox = document.getElementById('convertFlacCheckbox');
         const languageSelect = document.getElementById('languageSelect');
-
-        console.log('Script loaded, browser:', navigator.userAgent);
 
         let selectedFiles = [];
         let jobs = {};
@@ -1141,11 +1132,6 @@
 
         // Load existing jobs when page loads
         loadExistingJobs();
-
-        // Log iOS detection (removed banner for cleaner UI)
-        if (isIOS) {
-            console.log('iOS device detected - using chunked uploads for files > 3MB');
-        }
 
         // Mode toggle handlers
         audioModeBtn.addEventListener('click', () => {
@@ -1301,13 +1287,10 @@
         // Upload
         uploadBtn.addEventListener('click', async () => {
             try {
-                console.log('Upload button clicked');
                 if (selectedFiles.length === 0) {
-                    console.log('No files selected');
                     return;
                 }
 
-                console.log(`Starting upload of ${selectedFiles.length} file(s)`);
                 uploadBtn.disabled = true;
                 isUploading = true;
 
@@ -1315,7 +1298,7 @@
                 try {
                     await requestWakeLock();
                 } catch (wakeLockErr) {
-                    console.log('Wake lock failed (non-critical):', wakeLockErr);
+                    // Wake lock not available - continue without it
                 }
 
                 // Disable remove buttons
@@ -1328,7 +1311,6 @@
                     status: 'pending'
                 }));
 
-                console.log('Upload queue created:', uploadQueue.length);
                 processNextFile();
             } catch (error) {
                 console.error('Upload button click error:', error);
@@ -1373,12 +1355,8 @@
             statusEl.className = 'queue-status uploading';
             statusEl.textContent = 'Uploading';
 
-            console.log(`Starting chunked upload: ${file.name} (${formatBytes(file.size)})`);
-
             const uploadId = generateUploadId();
             const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-
-            console.log(`Upload ID: ${uploadId}, Total chunks: ${totalChunks}, Chunk size: ${formatBytes(CHUNK_SIZE)}`);
 
             try {
                 // Upload chunks
@@ -1386,8 +1364,6 @@
                     const start = chunkIndex * CHUNK_SIZE;
                     const end = Math.min(start + CHUNK_SIZE, file.size);
                     const chunk = file.slice(start, end);
-
-                    console.log(`Uploading chunk ${chunkIndex + 1}/${totalChunks}: ${formatBytes(start)} - ${formatBytes(end)}`);
 
                     const formData = new FormData();
                     formData.append('chunk', chunk, file.name);
@@ -1412,7 +1388,6 @@
                             }
 
                             const data = await response.json();
-                            console.log(`Chunk ${chunkIndex + 1}/${totalChunks} uploaded:`, data.message);
                             success = true;
 
                             // Update progress
@@ -1422,7 +1397,6 @@
 
                         } catch (error) {
                             retries--;
-                            console.warn(`Chunk ${chunkIndex + 1} upload failed, retries left: ${retries}`, error);
                             if (retries === 0) {
                                 throw error;
                             }
@@ -1432,7 +1406,6 @@
                     }
                 }
 
-                console.log('All chunks uploaded, starting transcription...');
                 messageEl.textContent = 'All chunks uploaded, starting processing...';
 
                 // Start transcription
@@ -1453,7 +1426,6 @@
                 }
 
                 const data = await startResponse.json();
-                console.log('Transcription started:', data);
 
                 jobs[data.job_id] = {
                     job_id: data.job_id,
@@ -1478,7 +1450,6 @@
                 setTimeout(() => processNextFile(), 500);
 
             } catch (error) {
-                console.error('Chunked upload failed:', error);
                 handleUploadError(index, `Upload failed: ${error.message}`);
             }
         }
@@ -1490,7 +1461,6 @@
         function uploadFile(file, index) {
             // Use chunked upload for large files on iOS or all files in transcript mode on iOS
             if (isIOS && file.size > USE_CHUNKED_UPLOAD_THRESHOLD) {
-                console.log(`Using chunked upload for ${file.name} (iOS device, file size: ${formatBytes(file.size)})`);
                 return uploadFileChunked(file, index);
             }
 
@@ -1528,24 +1498,16 @@
                     const percentComplete = Math.round((e.loaded / e.total) * 100);
                     progressFill.style.width = percentComplete + '%';
                     messageEl.textContent = `Uploading: ${percentComplete}% (${formatBytes(e.loaded)} / ${formatBytes(e.total)})`;
-                    console.log(`Upload progress: ${percentComplete}% (${formatBytes(e.loaded)} / ${formatBytes(e.total)})`);
                 }
             });
 
-            // Add listeners for ALL XHR events to debug iOS issue
-            xhr.upload.addEventListener('loadstart', () => console.log('XHR upload: loadstart'));
-            xhr.upload.addEventListener('loadend', () => console.log('XHR upload: loadend'));
-            xhr.addEventListener('readystatechange', () => console.log(`XHR readyState: ${xhr.readyState} (0=UNSENT, 1=OPENED, 2=HEADERS_RECEIVED, 3=LOADING, 4=DONE)`));
-
             // Handle timeout
             xhr.addEventListener('timeout', () => {
-                console.error('Upload timeout');
                 handleUploadError(index, 'Upload timeout - file may be too large or connection too slow');
             });
 
             // Handle completion
             xhr.addEventListener('load', () => {
-                console.log(`Upload complete: status ${xhr.status}`);
                 if (xhr.status >= 200 && xhr.status < 300) {
                     try {
                         const data = JSON.parse(xhr.responseText);
@@ -1585,13 +1547,11 @@
 
             // Handle errors
             xhr.addEventListener('error', (e) => {
-                console.error('Upload network error:', e);
                 handleUploadError(index, 'Network error - check your connection');
             });
 
             // Handle abort
             xhr.addEventListener('abort', () => {
-                console.log('Upload aborted');
                 handleUploadError(index, 'Upload cancelled');
             });
 
@@ -1603,7 +1563,6 @@
             let progressCheckInterval = setInterval(() => {
                 const timeSinceLastProgress = Date.now() - lastProgressTime;
                 if (timeSinceLastProgress > 15000) { // Reduced to 15 seconds
-                    console.warn(`No upload progress for 15 seconds (last: ${formatBytes(lastProgressBytes)})`);
                     clearInterval(progressCheckInterval);
                     if (keepAliveInterval) clearInterval(keepAliveInterval);
                     xhr.abort();
@@ -1618,9 +1577,6 @@
                 // Update page title to show activity
                 document.title = `Uploading... ${activityCounter % 4 === 0 ? '⬆️' : activityCounter % 4 === 1 ? '⬆️⬆️' : activityCounter % 4 === 2 ? '⬆️⬆️⬆️' : '⬆️⬆️⬆️⬆️'}`;
                 activityCounter++;
-
-                // Log to console to keep connection alive
-                console.log(`Upload active: ${formatBytes(lastProgressBytes)} sent`);
             }, 1000); // Update every second
 
             // Update last progress time on any progress event
@@ -1643,8 +1599,6 @@
             xhr.addEventListener('timeout', clearProgressCheck);
 
             // Send request
-            console.log(`Starting upload: ${file.name} (${formatBytes(file.size)}) to ${endpoint}`);
-            console.log(`Browser: ${navigator.userAgent}`);
             xhr.open('POST', endpoint);
 
             // Add headers for better mobile compatibility
@@ -1655,9 +1609,7 @@
 
             try {
                 xhr.send(formData);
-                console.log('FormData sent successfully');
             } catch (e) {
-                console.error('Error sending FormData:', e);
                 clearInterval(progressCheckInterval);
                 handleUploadError(index, `Failed to send: ${e.message}`);
             }
