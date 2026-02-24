@@ -890,6 +890,126 @@ def stream_audio(job_id: str):
     return send_file(str(audio_path), mimetype="audio/wav")
 
 
+@app.route("/api/audio/<job_id>/trim", methods=["POST"])
+@login_required
+def trim_audio(job_id: str):
+    """Trim audio file and optionally re-transcribe."""
+    with jobs_lock:
+        job = jobs.get(job_id)
+
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+
+    # Get trim parameters
+    data = request.get_json()
+    start_time = float(data.get("start_time", 0))
+    end_time = data.get("end_time")
+
+    if end_time is None:
+        return jsonify({"error": "end_time is required"}), 400
+
+    end_time = float(end_time)
+
+    if start_time < 0 or end_time <= start_time:
+        return jsonify({"error": "Invalid trim times"}), 400
+
+    # Find audio file
+    upload_dir = app.config["UPLOAD_FOLDER"] / job_id
+    if not upload_dir.exists():
+        return jsonify({"error": "Audio not found"}), 404
+
+    wav_files = list(upload_dir.glob("*.WAV")) + list(upload_dir.glob("*.wav"))
+    if not wav_files:
+        return jsonify({"error": "Audio file not found"}), 404
+
+    audio_path = wav_files[0]
+
+    # Create backup of original audio
+    backup_path = audio_path.with_suffix(audio_path.suffix + ".backup")
+    if not backup_path.exists():
+        shutil.copy2(audio_path, backup_path)
+
+    # Create temporary output path
+    temp_output = audio_path.with_suffix(".trimmed.wav")
+
+    # Calculate duration
+    duration = end_time - start_time
+
+    # Use ffmpeg to trim the audio
+    try:
+        cmd = [
+            "ffmpeg",
+            "-i", str(audio_path),
+            "-ss", str(start_time),
+            "-t", str(duration),
+            "-c", "copy",
+            "-y",
+            str(temp_output)
+        ]
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+
+        # Replace original with trimmed version
+        shutil.move(str(temp_output), str(audio_path))
+
+        # Update segments timestamps by subtracting start_time
+        output_dir = app.config["OUTPUT_FOLDER"] / job_id
+        if output_dir.exists():
+            json_files = list(output_dir.glob("*_timestamps.json"))
+            if json_files:
+                json_path = json_files[0]
+                try:
+                    with open(json_path, 'r') as f:
+                        segments_data = json.load(f)
+
+                    # Update timestamps in segments
+                    if "segments" in segments_data:
+                        for segment in segments_data["segments"]:
+                            segment["start"] = max(0, segment["start"] - start_time)
+                            segment["end"] = max(0, segment["end"] - start_time)
+
+                        # Filter out segments that are now outside the trimmed range
+                        segments_data["segments"] = [
+                            s for s in segments_data["segments"]
+                            if s["start"] < duration
+                        ]
+
+                        # Save updated segments
+                        with open(json_path, 'w') as f:
+                            json.dump(segments_data, f, indent=2)
+                except Exception as e:
+                    print(f"Warning: Failed to update segment timestamps: {e}", flush=True)
+
+        return jsonify({
+            "success": True,
+            "message": f"Audio trimmed successfully. New duration: {duration:.2f}s",
+            "new_duration": duration,
+            "backup_created": True
+        })
+
+    except subprocess.CalledProcessError as e:
+        # Clean up temp file if it exists
+        if temp_output.exists():
+            temp_output.unlink()
+
+        return jsonify({
+            "error": f"Failed to trim audio: {e.stderr}"
+        }), 500
+    except Exception as e:
+        # Clean up temp file if it exists
+        if temp_output.exists():
+            temp_output.unlink()
+
+        return jsonify({
+            "error": f"Failed to trim audio: {str(e)}"
+        }), 500
+
+
 @app.route("/api/segments/<job_id>")
 @login_required
 def get_segments(job_id: str):
