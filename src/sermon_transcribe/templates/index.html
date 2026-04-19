@@ -1013,11 +1013,10 @@
     </div>
 
     <script>
-        // iOS detection and chunked upload configuration
+        // Chunked upload configuration
         // MUST be at top of script before any functions that use them
-        const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
-        const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB chunks for iOS compatibility
-        const USE_CHUNKED_UPLOAD_THRESHOLD = 3 * 1024 * 1024; // Use chunked upload for files > 3MB on iOS (iOS buffer limit is ~3.5MB)
+        const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB chunks are resilient through reverse proxies/tunnels
+        const USE_CHUNKED_UPLOAD_THRESHOLD = 3 * 1024 * 1024; // Use chunked upload for audio files > 3MB
 
         // Global error handler for debugging mobile issues
         window.addEventListener('error', function(e) {
@@ -1459,8 +1458,9 @@
         }
 
         function uploadFile(file, index) {
-            // Use chunked upload for large files on iOS or all files in transcript mode on iOS
-            if (isIOS && file.size > USE_CHUNKED_UPLOAD_THRESHOLD) {
+            // Use chunked upload for larger audio files to avoid large single-request failures behind tunnels/proxies.
+            // Transcript uploads still use the direct endpoint because there is no chunked transcript flow.
+            if (uploadMode === 'audio' && file.size > USE_CHUNKED_UPLOAD_THRESHOLD) {
                 return uploadFileChunked(file, index);
             }
 
@@ -1560,13 +1560,22 @@
             let lastProgressBytes = 0;
             let keepAliveInterval = null;
 
+            let uploadCompleted = false;
+            xhr.upload.addEventListener('load', () => {
+                uploadCompleted = true;
+                messageEl.textContent = 'Upload complete, waiting for server response...';
+            });
+
             let progressCheckInterval = setInterval(() => {
+                if (uploadCompleted) {
+                    return;
+                }
                 const timeSinceLastProgress = Date.now() - lastProgressTime;
                 if (timeSinceLastProgress > 15000) { // Reduced to 15 seconds
                     clearInterval(progressCheckInterval);
                     if (keepAliveInterval) clearInterval(keepAliveInterval);
                     xhr.abort();
-                    handleUploadError(index, 'Upload stalled - iOS may have suspended the connection. Try using Safari instead of Chrome on iOS, or use a desktop browser.');
+                    handleUploadError(index, 'Upload stalled - network/proxy connection may have dropped. Retry the upload; large audio files will automatically switch to chunked upload.');
                 }
             }, 3000); // Check every 3 seconds
 
@@ -1603,9 +1612,6 @@
 
             // Add headers for better mobile compatibility
             xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
-
-            // Prevent connection pooling issues on mobile
-            xhr.setRequestHeader('Connection', 'keep-alive');
 
             try {
                 xhr.send(formData);
