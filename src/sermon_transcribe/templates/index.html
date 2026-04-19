@@ -1560,7 +1560,16 @@
             let lastProgressBytes = 0;
             let keepAliveInterval = null;
 
+            let uploadCompleted = false;
+            xhr.upload.addEventListener('load', () => {
+                uploadCompleted = true;
+                messageEl.textContent = 'Upload complete, waiting for server response...';
+            });
+
             let progressCheckInterval = setInterval(() => {
+                if (uploadCompleted) {
+                    return;
+                }
                 const timeSinceLastProgress = Date.now() - lastProgressTime;
                 if (timeSinceLastProgress > 15000) { // Reduced to 15 seconds
                     clearInterval(progressCheckInterval);
@@ -1603,9 +1612,6 @@
 
             // Add headers for better mobile compatibility
             xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
-
-            // Prevent connection pooling issues on mobile
-            xhr.setRequestHeader('Connection', 'keep-alive');
 
             try {
                 xhr.send(formData);
