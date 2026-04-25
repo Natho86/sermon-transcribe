@@ -1016,7 +1016,6 @@
         // Chunked upload configuration
         // MUST be at top of script before any functions that use them
         const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB chunks are resilient through reverse proxies/tunnels
-        const USE_CHUNKED_UPLOAD_THRESHOLD = 3 * 1024 * 1024; // Use chunked upload for audio files > 3MB
 
         // Global error handler for debugging mobile issues
         window.addEventListener('error', function(e) {
@@ -1460,7 +1459,7 @@
         function uploadFile(file, index) {
             // Use chunked upload for larger audio files to avoid large single-request failures behind tunnels/proxies.
             // Transcript uploads still use the direct endpoint because there is no chunked transcript flow.
-            if (uploadMode === 'audio' && file.size > USE_CHUNKED_UPLOAD_THRESHOLD) {
+            if (uploadMode === 'audio') {
                 return uploadFileChunked(file, index);
             }
 
@@ -1575,7 +1574,7 @@
                     clearInterval(progressCheckInterval);
                     if (keepAliveInterval) clearInterval(keepAliveInterval);
                     xhr.abort();
-                    handleUploadError(index, 'Upload stalled - network/proxy connection may have dropped. Retry the upload; large audio files will automatically switch to chunked upload.');
+                    handleUploadError(index, 'Upload stalled - network/proxy connection may have dropped. Retry the upload.');
                 }
             }, 3000); // Check every 3 seconds
 
