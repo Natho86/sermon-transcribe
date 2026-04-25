@@ -1457,7 +1457,7 @@
         }
 
         function uploadFile(file, index) {
-            // Always use chunked upload in audio mode to avoid large single-request failures behind tunnels/proxies.
+            // Use chunked upload for larger audio files to avoid large single-request failures behind tunnels/proxies.
             // Transcript uploads still use the direct endpoint because there is no chunked transcript flow.
             if (uploadMode === 'audio') {
                 return uploadFileChunked(file, index);
