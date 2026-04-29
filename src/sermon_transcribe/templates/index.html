@@ -48,8 +48,19 @@
             gap: 24px;
         }
         .sidebar { background: #111827; border-radius: 12px; color: #e5e7eb; padding: 24px 16px; min-height: 100%; }
-        .sidebar h2 { font-size: 16px; margin-bottom: 8px; color: #fff; }
-        .sidebar p { font-size: 13px; color: #9ca3af; }
+        .sidebar-nav { display: flex; flex-direction: column; gap: 8px; }
+        .sidebar-link {
+            display: block;
+            padding: 10px 12px;
+            border-radius: 8px;
+            color: #e5e7eb;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 600;
+            transition: background-color 0.2s ease, color 0.2s ease;
+        }
+        .sidebar-link:hover { background: #1f2937; color: #fff; }
+        .sidebar-link.active { background: #2563eb; color: #fff; }
         .main-grid { display:grid; grid-template-columns: 1fr 1fr; gap:20px; margin-top:20px; }
         .card { background:#fff; border-radius:12px; box-shadow: 0 1px 2px rgba(16,24,40,.04), 0 8px 24px rgba(16,24,40,.06); padding:20px; }
         .options-section { margin-bottom:18px; }
@@ -844,8 +855,11 @@
 
     <div class="dashboard">
         <aside class="sidebar">
-            <h2>Transcription Dashboard</h2>
-            <p>Upload and manage sermon processing jobs.</p>
+            <nav class="sidebar-nav" aria-label="Sidebar navigation">
+                <a href="{{ url_for('index') }}" class="sidebar-link active">Dashboard</a>
+                <a href="#" class="sidebar-link" aria-disabled="true">Settings</a>
+                <a href="{{ url_for('logout') }}" class="sidebar-link">Logout</a>
+            </nav>
         </aside>
         <div class="container">
         <h1>🎙️ Sermon Transcription</h1>
