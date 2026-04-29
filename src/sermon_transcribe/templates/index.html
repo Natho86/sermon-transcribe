@@ -841,7 +841,12 @@
 <body>
     <div id="connectionStatus" class="connection-status disconnected">Connecting...</div>
 
-    <div class="dashboard"><aside class="sidebar"><h2>Transcription Dashboard</h2><p>Upload and manage sermon processing jobs.</p></aside><div class="container">
+    <div class="dashboard">
+        <aside class="sidebar">
+            <h2>Transcription Dashboard</h2>
+            <p>Upload and manage sermon processing jobs.</p>
+        </aside>
+        <div class="container">
         <h1>🎙️ Sermon Transcription</h1>
         <p class="subtitle">Upload your audio files for AI-powered transcription and summarization</p>
 
@@ -857,36 +862,40 @@
             </button>
         </div>
 
-        <div class="main-grid"><div class="card"><div class="upload-area" id="uploadArea">
-            <div class="upload-icon">📁</div>
-            <p id="uploadPrompt"><strong>Click to browse</strong> or drag and drop your audio files here</p>
-            <p id="uploadHint" style="color: #999; font-size: 14px; margin-top: 10px;">Supported: WAV, MP3, FLAC, M4A, AAC (max 4GB per file)</p>
-            <input type="file" id="fileInput" accept=".wav,.mp3,.flac,.m4a,.aac" multiple>
-            <div class="file-name" id="fileName"></div>
-        </div>
+        <div class="main-grid">
+            <div class="card">
+                <div class="upload-area" id="uploadArea">
+                    <div class="upload-icon">📁</div>
+                    <p id="uploadPrompt"><strong>Click to browse</strong> or drag and drop your audio files here</p>
+                    <p id="uploadHint" style="color: #999; font-size: 14px; margin-top: 10px;">Supported: WAV, MP3, FLAC, M4A, AAC (max 4GB per file)</p>
+                    <input type="file" id="fileInput" accept=".wav,.mp3,.flac,.m4a,.aac" multiple>
+                    <div class="file-name" id="fileName"></div>
+                </div>
 
-        <!-- File Queue -->
-        <div id="fileQueue" style="display: none; margin: 20px 0;">
-            <h3 style="color: #333; font-size: 1.1em; margin-bottom: 10px;">Upload Queue</h3>
-            <div id="queueList"></div>
-        </div>
+                <!-- File Queue -->
+                <div id="fileQueue" style="display: none; margin: 20px 0;">
+                    <h3 style="color: #333; font-size: 1.1em; margin-bottom: 10px;">Upload Queue</h3>
+                    <div id="queueList"></div>
+                </div>
+            </div>
 
-        </div></div><div class="card"><div class="options-section"><h3>AI Processing</h3><div class="cleanup-option">
-            <input type="checkbox" id="cleanupCheckbox" checked>
-            <label for="cleanupCheckbox">
-                <strong>Clean and summarize transcript with AI</strong>
-                <br>
-                <span style="font-size: 14px; color: #666;">Uses Claude to format text and generate summary (requires API key)</span>
-            </label>
-        </div></div>
+            <div class="card">
+                <div class="options-section"><h3>AI Processing</h3><div class="cleanup-option">
+                    <input type="checkbox" id="cleanupCheckbox" checked>
+                    <label for="cleanupCheckbox">
+                        <strong>Clean and summarize transcript with AI</strong>
+                        <br>
+                        <span style="font-size: 14px; color: #666;">Uses Claude to format text and generate summary (requires API key)</span>
+                    </label>
+                </div></div>
 
-        <div class="options-section"><h3>Language</h3><div class="cleanup-option">
-            <label for="languageSelect" style="display: block; margin-bottom: 8px;">
-                <strong>Transcription Language</strong>
-                <br>
-                <span style="font-size: 14px; color: #666;">Select language for accurate transcription (defaults to English)</span>
-            </label>
-            <select id="languageSelect" style="padding: 8px; border-radius: 4px; border: 1px solid #ccc; width: 100%; max-width: 300px; font-size: 14px;">
+                <div class="options-section"><h3>Language</h3><div class="cleanup-option">
+                    <label for="languageSelect" style="display: block; margin-bottom: 8px;">
+                        <strong>Transcription Language</strong>
+                        <br>
+                        <span style="font-size: 14px; color: #666;">Select language for accurate transcription (defaults to English)</span>
+                    </label>
+<select id="languageSelect" style="padding: 8px; border-radius: 4px; border: 1px solid #ccc; width: 100%; max-width: 300px; font-size: 14px;">
                 <option value="en" selected>English</option>
                 <option value="auto">Auto-detect</option>
                 <option value="zh">Chinese</option>
@@ -1006,7 +1015,9 @@
                     <label for="convertFlacCheckbox" style="cursor: pointer; user-select: none;">Convert to FLAC</label>
                 </div>
             </div>
-        </div></div></div></div>
+        </div></div>
+            </div>
+        </div>
 
         <button class="page-action" id="uploadBtn" disabled>Upload & Process Files</button>
         <p style="color: #999; font-size: 13px; margin-top: 10px; text-align: center;">
@@ -1021,7 +1032,9 @@
         </div>
 
         <div class="card" style="margin-top:20px;"><div class="job-list" id="jobList"></div></div>
-    </div></div>
+    </div>
+    </div>
+
 
     <!-- Modal for viewing files -->
     <div class="modal" id="fileModal">
