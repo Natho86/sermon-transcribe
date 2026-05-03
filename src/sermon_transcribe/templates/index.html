@@ -144,7 +144,7 @@
         }
 
         button {
-            background: #F8FAFC;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             border: none;
             padding: 15px 40px;
@@ -162,8 +162,12 @@
         }
 
         button:disabled {
-            opacity: 0.6;
+            background: #cbd5e1;
+            color: #f8fafc;
+            opacity: 1;
             cursor: not-allowed;
+            box-shadow: none;
+            transform: none;
         }
 
         .upload-progress {
@@ -539,6 +543,125 @@
 
         /* Mobile optimizations */
         @media (max-width: 768px) {
+            body {
+                padding: 12px;
+                align-items: stretch;
+            }
+
+            .dashboard {
+                gap: 12px;
+            }
+
+            .container {
+                padding: 18px 14px;
+                border-radius: 10px;
+            }
+
+            .sidebar {
+                padding: 12px;
+            }
+
+            .sidebar-nav {
+                flex-direction: row;
+                gap: 8px;
+            }
+
+            .sidebar-link {
+                text-align: center;
+                font-size: 13px;
+                flex: 1;
+            }
+
+            h1 {
+                font-size: 1.9em;
+                line-height: 1.2;
+            }
+
+            .subtitle {
+                margin-bottom: 20px;
+            }
+
+            .main-grid {
+                gap: 14px;
+            }
+
+            .card {
+                padding: 16px;
+            }
+
+            .upload-area {
+                min-height: 180px;
+                padding: 24px 14px;
+            }
+
+            .upload-icon {
+                font-size: 36px;
+            }
+
+            .jobs-controls {
+                flex-direction: column;
+                gap: 8px;
+            }
+
+            .jobs-controls input,
+            .jobs-controls select {
+                width: 100%;
+            }
+
+            .jobs-table,
+            .jobs-table thead,
+            .jobs-table tbody,
+            .jobs-table th,
+            .jobs-table td,
+            .jobs-table tr {
+                display: block;
+                width: 100%;
+            }
+
+            .jobs-table thead {
+                display: none;
+            }
+
+            .jobs-table tr {
+                padding: 12px;
+                margin-bottom: 12px;
+                border: 1px solid #e5e7eb;
+                border-radius: 10px;
+                background: #fff;
+            }
+
+            .jobs-table td {
+                border-bottom: 1px solid #f1f5f9;
+                padding: 10px 0;
+            }
+
+            .jobs-table td:last-child {
+                border-bottom: none;
+                padding-bottom: 0;
+            }
+
+            .jobs-table td::before {
+                content: attr(data-label);
+                display: block;
+                color: #64748b;
+                font-size: 12px;
+                font-weight: 700;
+                text-transform: uppercase;
+                margin-bottom: 4px;
+            }
+
+            .connection-status {
+                top: 10px;
+                right: 10px;
+                padding: 8px 12px;
+                font-size: 11px;
+            }
+
+            .page-action {
+                margin-top: 12px;
+                padding: 14px 18px;
+            }
+
             .download-links {
                 flex-direction: column;
                 gap: 8px;
@@ -559,9 +682,7 @@
                 max-width: 100%;
             }
 
-            .job-actions {
-                width: 100%;
-            }
+            .job-actions { width: 100%; }
         }
 
         /* File Queue Styles */
@@ -1768,7 +1889,7 @@
                 `;
             }
 
-            jobEl.innerHTML = `<td class="job-filename">${job.filename}</td><td><span class="job-status ${statusClass}">${job.status}</span></td><td><div class="progress-bar"><div class="progress-fill" style="width:${job.progress}%"></div></div></td><td>${job.duration || '-'} </td><td>${new Date(job.created_at).toLocaleString()}</td><td>${jobActions}</td>`;
+            jobEl.innerHTML = `<td class="job-filename" data-label="File Name">${job.filename}</td><td data-label="Status"><span class="job-status ${statusClass}">${job.status}</span></td><td data-label="Progress"><div class="progress-bar"><div class="progress-fill" style="width:${job.progress}%"></div></div></td><td data-label="Duration">${job.duration || '-'} </td><td data-label="Uploaded">${new Date(job.created_at).toLocaleString()}</td><td data-label="Actions">${jobActions}</td>`;
 
             return jobEl;
         }
