@@ -23,9 +23,19 @@ from sermon_transcribe.cleanup import (
     build_summary_merge_prompt,
     build_summary_prompt,
     call_claude,
+    call_llm,
     split_into_chunks,
+    DEFAULT_MODEL,
+    DEFAULT_OPENROUTER_MODEL,
+    DEFAULT_OPENAI_MODEL,
 )
 from sermon_transcribe.io_utils import ensure_dir
+from sermon_transcribe.settings import (
+    load_keys,
+    save_keys,
+    get_active_provider,
+    verify_key,
+)
 from sermon_transcribe.transcription import (
     TranscriptionResult,
     build_config,
@@ -439,13 +449,21 @@ def process_transcription(job_id: str, audio_path: Path, output_dir: Path, do_cl
 
 
 def cleanup_transcript(job_id: str, result: TranscriptionResult, output_dir: Path):
-    """Clean up transcript with Claude and generate summary."""
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
+    """Clean up transcript with an LLM and generate summary."""
+    provider_info = get_active_provider()
+    if not provider_info:
         emit_progress(job_id, "processing", 60, "Skipping cleanup (no API key)")
         return
 
-    model_name = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
+    api_key = provider_info["key"]
+    provider = provider_info["provider"]
+
+    if provider == "openrouter":
+        model_name = provider_info["model"] or DEFAULT_OPENROUTER_MODEL
+    elif provider == "openai":
+        model_name = provider_info["model"] or DEFAULT_OPENAI_MODEL
+    else:
+        model_name = provider_info["model"] or os.environ.get("CLAUDE_MODEL", DEFAULT_MODEL)
     raw_text = result.text_path.read_text(encoding="utf-8").strip()
 
     if not raw_text:
@@ -465,20 +483,21 @@ def cleanup_transcript(job_id: str, result: TranscriptionResult, output_dir: Pat
         emit_progress(job_id, "processing", 65 + (idx * 10 // len(chunks)), f"Cleaning chunk {idx}/{len(chunks)}")
         prompt = build_prompt(chunk)
         try:
-            cleaned = call_claude(
+            cleaned = call_llm(
                 prompt=prompt,
                 api_key=api_key,
                 model=model_name,
-                max_tokens=4000,  # Increased from 1200 to prevent truncation
+                max_tokens=4000,
                 temperature=0.1,
                 timeout=120,
+                provider=provider,
             )
             cleaned_text_chunk = cleaned.strip()
 
             # Warn if chunk came back empty but original wasn't
             if not cleaned_text_chunk and chunk.strip():
-                print(f"WARNING: Chunk {idx}/{len(chunks)} returned empty from Claude (original had {len(chunk)} chars)", flush=True)
-                # Keep original chunk if Claude returns nothing
+                print(f"WARNING: Chunk {idx}/{len(chunks)} returned empty from LLM (original had {len(chunk)} chars)", flush=True)
+                # Keep original chunk if LLM returns nothing
                 cleaned_chunks.append(chunk.strip())
             else:
                 cleaned_chunks.append(cleaned_text_chunk)
@@ -510,13 +529,14 @@ def cleanup_transcript(job_id: str, result: TranscriptionResult, output_dir: Pat
 
     if len(cleaned_text) <= 16000:
         summary_prompt = build_summary_prompt(cleaned_text)
-        summary = call_claude(
+        summary = call_llm(
             prompt=summary_prompt,
             api_key=api_key,
             model=model_name,
             max_tokens=600,
             temperature=0.1,
             timeout=120,
+            provider=provider,
         )
     else:
         summary_chunks = split_into_chunks(cleaned_text, 16000)
@@ -527,24 +547,26 @@ def cleanup_transcript(job_id: str, result: TranscriptionResult, output_dir: Pat
                 return
 
             emit_progress(job_id, "processing", 80 + (idx * 5 // len(summary_chunks)), f"Summary chunk {idx}/{len(summary_chunks)}")
-            notes = call_claude(
+            notes = call_llm(
                 prompt=build_summary_chunk_prompt(chunk),
                 api_key=api_key,
                 model=model_name,
                 max_tokens=600,
                 temperature=0.1,
                 timeout=120,
+                provider=provider,
             )
             chunk_notes.append(notes.strip())
 
         combined_notes = "\n\n".join(note for note in chunk_notes if note)
-        summary = call_claude(
+        summary = call_llm(
             prompt=build_summary_merge_prompt(combined_notes),
             api_key=api_key,
             model=model_name,
             max_tokens=600,
             temperature=0.1,
             timeout=120,
+            provider=provider,
         )
 
     summary_path = output_dir / f"{base_name}_summary.txt"
@@ -645,6 +667,140 @@ def index():
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
     return response
+
+
+@app.route("/settings")
+@login_required
+def settings():
+    """Settings page."""
+    response = app.make_response(render_template("settings.html"))
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
+
+@app.route("/api/settings/keys", methods=["GET"])
+@login_required
+def api_get_keys():
+    """List all stored API keys (masked)."""
+    data = load_keys()
+    keys = data.get("keys", [])
+    masked = []
+    for entry in keys:
+        raw = entry.get("key", "")
+        masked_key = raw[:8] + "..." + raw[-4:] if len(raw) > 12 else "****"
+        masked.append({
+            "id": entry["id"],
+            "label": entry.get("label", ""),
+            "provider": entry.get("provider", "anthropic"),
+            "model": entry.get("model", ""),
+            "enabled": entry.get("enabled", False),
+            "masked_key": masked_key,
+        })
+    env_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    env_configured = bool(env_key)
+    return jsonify({"keys": masked, "env_key_configured": env_configured})
+
+
+@app.route("/api/settings/keys", methods=["POST"])
+@login_required
+def api_add_key():
+    """Add a new API key."""
+    body = request.get_json(silent=True) or {}
+    label = body.get("label", "").strip()
+    provider = body.get("provider", "anthropic").strip()
+    key = body.get("key", "").strip()
+    model = body.get("model", "").strip()
+
+    if not key:
+        return jsonify({"error": "API key is required"}), 400
+    if not label:
+        return jsonify({"error": "Label is required"}), 400
+
+    data = load_keys()
+    new_id = secrets.token_hex(8)
+    new_entry = {
+        "id": new_id,
+        "label": label,
+        "provider": provider,
+        "key": key,
+        "model": model,
+        "enabled": False,
+    }
+    data.setdefault("keys", []).append(new_entry)
+    save_keys(data)
+    return jsonify({"success": True, "id": new_id})
+
+
+@app.route("/api/settings/keys/<key_id>", methods=["PUT"])
+@login_required
+def api_update_key(key_id: str):
+    """Update a stored API key (label, key value, or enabled state)."""
+    body = request.get_json(silent=True) or {}
+    data = load_keys()
+    keys = data.get("keys", [])
+
+    entry = next((k for k in keys if k["id"] == key_id), None)
+    if not entry:
+        return jsonify({"error": "Key not found"}), 404
+
+    if "label" in body:
+        entry["label"] = body["label"].strip()
+    if "key" in body and body["key"].strip():
+        entry["key"] = body["key"].strip()
+    if "model" in body:
+        entry["model"] = body["model"].strip()
+    if "enabled" in body:
+        enable = bool(body["enabled"])
+        if enable:
+            # Only one key enabled at a time
+            for k in keys:
+                k["enabled"] = False
+        entry["enabled"] = enable
+
+    save_keys(data)
+    return jsonify({"success": True})
+
+
+@app.route("/api/settings/keys/<key_id>", methods=["DELETE"])
+@login_required
+def api_delete_key(key_id: str):
+    """Delete a stored API key."""
+    data = load_keys()
+    keys = data.get("keys", [])
+    new_keys = [k for k in keys if k["id"] != key_id]
+    if len(new_keys) == len(keys):
+        return jsonify({"error": "Key not found"}), 404
+    data["keys"] = new_keys
+    save_keys(data)
+    return jsonify({"success": True})
+
+
+@app.route("/api/settings/keys/<key_id>/verify", methods=["POST"])
+@login_required
+def api_verify_key(key_id: str):
+    """Verify a stored API key by making a test request."""
+    data = load_keys()
+    entry = next((k for k in data.get("keys", []) if k["id"] == key_id), None)
+    if not entry:
+        return jsonify({"error": "Key not found"}), 404
+
+    result = verify_key(entry.get("provider", "anthropic"), entry["key"])
+    return jsonify(result)
+
+
+@app.route("/api/settings/keys/verify-raw", methods=["POST"])
+@login_required
+def api_verify_key_raw():
+    """Verify a key without storing it — used to load models before saving."""
+    body = request.get_json(silent=True) or {}
+    provider = body.get("provider", "anthropic").strip()
+    key = body.get("key", "").strip()
+    if not key:
+        return jsonify({"error": "key is required"}), 400
+    result = verify_key(provider, key)
+    return jsonify(result)
 
 
 @app.route("/review/<job_id>")

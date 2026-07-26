@@ -12,9 +12,15 @@ from typing import Iterable, List, Optional
 from sermon_transcribe.io_utils import ensure_dir, readable_path
 
 
-API_URL = "https://api.anthropic.com/v1/messages"
+ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
+# Keep old name as alias so CLI code still works
+API_URL = ANTHROPIC_API_URL
 ANTHROPIC_VERSION = "2023-06-01"
 DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
+DEFAULT_OPENROUTER_MODEL = "anthropic/claude-sonnet-4-5"
+DEFAULT_OPENAI_MODEL = "gpt-4o"
 DEFAULT_EXTENSIONS = ".txt"
 DEFAULT_CLEANED_SUFFIX = ""
 DEFAULT_RAW_SUFFIX = "_raw"
@@ -361,6 +367,159 @@ def call_claude(
     if last_error:
         raise RuntimeError(f"Anthropic API request failed: {last_error}") from last_error
     raise RuntimeError("Anthropic API request failed with unknown error.")
+
+
+def call_openrouter(
+    prompt: str,
+    api_key: str,
+    model: str,
+    max_tokens: int,
+    temperature: float,
+    timeout: int,
+    max_retries: int = 3,
+) -> str:
+    """Call OpenRouter's OpenAI-compatible chat completions endpoint."""
+    payload = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    data = json.dumps(payload).encode("utf-8")
+    headers = {
+        "content-type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+        "HTTP-Referer": "https://github.com/sermon-transcribe",
+        "X-Title": "Sermon Transcribe",
+    }
+
+    last_error: Optional[Exception] = None
+    for attempt in range(1, max_retries + 1):
+        req = urllib.request.Request(OPENROUTER_API_URL, data=data, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                body = response.read().decode("utf-8")
+                parsed = json.loads(body)
+                # OpenAI-compatible response format
+                choices = parsed.get("choices", [])
+                if not choices:
+                    raise RuntimeError(f"OpenRouter returned no choices: {body[:200]}")
+                return choices[0].get("message", {}).get("content", "").strip()
+        except urllib.error.HTTPError as exc:
+            last_error = exc
+            if exc.code in {429, 500, 502, 503, 504} and attempt < max_retries:
+                time.sleep(2**attempt)
+                continue
+            error_body = exc.read().decode("utf-8") if exc.fp else str(exc)
+            if exc.code in {401, 403}:
+                raise RuntimeError("OpenRouter API key is invalid or unauthorized.") from exc
+            raise RuntimeError(f"OpenRouter API error {exc.code}: {error_body}") from exc
+        except urllib.error.URLError as exc:
+            last_error = exc
+            if attempt < max_retries:
+                time.sleep(2**attempt)
+                continue
+            raise RuntimeError(f"OpenRouter connection error: {exc}") from exc
+
+    if last_error:
+        raise RuntimeError(f"OpenRouter request failed: {last_error}") from last_error
+    raise RuntimeError("OpenRouter request failed with unknown error.")
+
+
+def call_openai(
+    prompt: str,
+    api_key: str,
+    model: str,
+    max_tokens: int,
+    temperature: float,
+    timeout: int,
+    max_retries: int = 3,
+) -> str:
+    """Call OpenAI's chat completions endpoint."""
+    payload = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    data = json.dumps(payload).encode("utf-8")
+    headers = {
+        "content-type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+
+    last_error: Optional[Exception] = None
+    for attempt in range(1, max_retries + 1):
+        req = urllib.request.Request(OPENAI_API_URL, data=data, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                body = response.read().decode("utf-8")
+                parsed = json.loads(body)
+                choices = parsed.get("choices", [])
+                if not choices:
+                    raise RuntimeError(f"OpenAI returned no choices: {body[:200]}")
+                return choices[0].get("message", {}).get("content", "").strip()
+        except urllib.error.HTTPError as exc:
+            last_error = exc
+            if exc.code in {429, 500, 502, 503, 504} and attempt < max_retries:
+                time.sleep(2**attempt)
+                continue
+            error_body = exc.read().decode("utf-8") if exc.fp else str(exc)
+            if exc.code in {401, 403}:
+                raise RuntimeError("OpenAI API key is invalid or unauthorized.") from exc
+            raise RuntimeError(f"OpenAI API error {exc.code}: {error_body}") from exc
+        except urllib.error.URLError as exc:
+            last_error = exc
+            if attempt < max_retries:
+                time.sleep(2**attempt)
+                continue
+            raise RuntimeError(f"OpenAI connection error: {exc}") from exc
+
+    if last_error:
+        raise RuntimeError(f"OpenAI request failed: {last_error}") from last_error
+    raise RuntimeError("OpenAI request failed with unknown error.")
+
+
+def call_llm(
+    prompt: str,
+    api_key: str,
+    model: str,
+    max_tokens: int,
+    temperature: float,
+    timeout: int,
+    provider: str = "anthropic",
+    max_retries: int = 3,
+) -> str:
+    """Dispatch an LLM call to the appropriate provider."""
+    if provider == "openrouter":
+        return call_openrouter(
+            prompt=prompt,
+            api_key=api_key,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            timeout=timeout,
+            max_retries=max_retries,
+        )
+    if provider == "openai":
+        return call_openai(
+            prompt=prompt,
+            api_key=api_key,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            timeout=timeout,
+            max_retries=max_retries,
+        )
+    return call_claude(
+        prompt=prompt,
+        api_key=api_key,
+        model=model,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        timeout=timeout,
+        max_retries=max_retries,
+    )
 
 
 def extract_text(payload: dict) -> str:
