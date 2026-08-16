@@ -19,11 +19,12 @@ services:
     env_file:
       - .env
     volumes:
-      # Persistent storage for uploads, outputs, and model cache
+      # Persistent storage for uploads, outputs, model cache, and app config (API keys)
       # These paths can be customized in .env file
       - ${UPLOAD_DIR:-./uploads}:/app/uploads
       - ${OUTPUT_DIR:-./output}:/app/output
       - ${MODEL_CACHE_DIR:-./model_cache}:/app/model_cache
+      - ${CONFIG_DIR:-./config}:/app/config
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/').read()"]

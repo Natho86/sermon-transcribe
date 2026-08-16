@@ -6,6 +6,7 @@
     <title>{% block title %}Sermon Transcribe{% endblock %}</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎙️</text></svg>">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
     {% block head %}{% endblock %}
 </head>
 <body>
@@ -44,6 +45,21 @@
                     toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
                 });
             }
+        })();
+
+        (function () {
+            var connectionStatus = document.getElementById('connectionStatus');
+            if (!connectionStatus || typeof io === 'undefined') return;
+            var socket = window.socket || io();
+            window.socket = socket;
+            socket.on('connect', function () {
+                connectionStatus.classList.remove('offline');
+                connectionStatus.querySelector('span').textContent = 'Connected';
+            });
+            socket.on('disconnect', function () {
+                connectionStatus.classList.add('offline');
+                connectionStatus.querySelector('span').textContent = 'Disconnected';
+            });
         })();
     </script>
     {% block scripts %}{% endblock %}

@@ -9,7 +9,6 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎙️</text></svg>">
-<script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
 <style>
     .st-system-message {
         background: var(--statusWarnBg);
@@ -508,14 +507,14 @@
         }).catch(err => console.error('Failed to log error:', err));
     });
 
-    const socket = io();
+    const socket = window.socket || io();
+    window.socket = socket;
     const uploadArea = document.getElementById('uploadArea');
     const fileInput = document.getElementById('fileInput');
     const fileName = document.getElementById('fileName');
     const uploadBtn = document.getElementById('uploadBtn');
     const jobList = document.getElementById('jobList');
     const cleanupCheckbox = document.getElementById('cleanupCheckbox');
-    const connectionStatus = document.getElementById('connectionStatus');
     const systemMessages = document.getElementById('systemMessages');
     const audioModeBtn = document.getElementById('audioModeBtn');
     const transcriptModeBtn = document.getElementById('transcriptModeBtn');
@@ -632,17 +631,6 @@
             selectedFiles.splice(index, 1);
             updateFileSelection();
         }
-    });
-
-    // WebSocket connection status
-    socket.on('connect', () => {
-        connectionStatus.classList.remove('offline');
-        connectionStatus.querySelector('span').textContent = 'Connected';
-    });
-
-    socket.on('disconnect', () => {
-        connectionStatus.classList.add('offline');
-        connectionStatus.querySelector('span').textContent = 'Disconnected';
     });
 
     // System messages
