@@ -1,0 +1,356 @@
+:root {
+  --bg: #F8FAFC;
+  --surface: #FFFFFF;
+  --surface2: #F1F5F9;
+  --border: #E2E8F0;
+  --borderStrong: #CBD5E1;
+  --text: #0F172A;
+  --text2: #334155;
+  --textMuted: #64748B;
+  --textSubtle: #94A3B8;
+  --accent: #4F46E5;
+  --accentHover: #4338CA;
+  --accentSoft: #EEF2FF;
+  --radius: 10px;
+  --radiusLg: 16px;
+  --radiusPill: 999px;
+  --shadowSm: 0 1px 2px rgba(15, 23, 42, .06);
+  --shadowMd: 0 8px 24px rgba(15, 23, 42, .08);
+  --statusInfo: #1D4ED8;
+  --statusInfoBg: #DBEAFE;
+  --statusWarn: #B45309;
+  --statusWarnBg: #FEF3C7;
+  --statusOk: #047857;
+  --statusOkBg: #D1FAE5;
+  --statusBad: #B91C1C;
+  --statusBadBg: #FEE2E2;
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+}
+
+a {
+  color: inherit;
+}
+
+button {
+  font-family: var(--font);
+}
+
+input,
+select,
+textarea {
+  font-family: var(--font);
+}
+
+/* Logo */
+.st-logo {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.st-logo span {
+  width: 3px;
+  border-radius: 2px;
+  background: #fff;
+}
+
+.st-logo span:nth-child(1) { height: 12px; }
+.st-logo span:nth-child(2) { height: 20px; }
+.st-logo span:nth-child(3) { height: 8px; }
+
+/* Header */
+.st-header {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  height: 64px;
+  gap: 12px;
+}
+
+.st-header-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.st-wordmark {
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.st-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.st-nav a {
+  padding: 8px 14px;
+  border-radius: 8px;
+  color: var(--textMuted);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 600;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+.st-nav a:hover {
+  background: var(--surface2);
+  color: var(--text);
+}
+
+.st-nav a.active {
+  background: var(--accentSoft);
+  color: var(--accent);
+}
+
+.st-nav a.st-logout {
+  margin-left: 8px;
+  border: 1px solid var(--border);
+  color: var(--text2);
+}
+
+.st-status-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 12px;
+  padding: 6px 10px;
+  border-radius: var(--radiusPill);
+  background: var(--statusOkBg);
+}
+
+.st-status-pill .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--statusOk);
+}
+
+.st-status-pill span {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--statusOk);
+}
+
+.st-status-pill.offline {
+  background: var(--statusBadBg);
+}
+
+.st-status-pill.offline .dot {
+  background: var(--statusBad);
+}
+
+.st-status-pill.offline span {
+  color: var(--statusBad);
+}
+
+.st-menu-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 18px;
+  line-height: 1;
+  color: var(--text2);
+  cursor: pointer;
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+
+.st-mobile-nav {
+  display: none;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 16px;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.st-mobile-nav a {
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: var(--text2);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.st-mobile-nav a.active {
+  background: var(--accentSoft);
+  color: var(--accent);
+}
+
+.st-mobile-nav.open {
+  display: flex;
+}
+
+/* Page shell */
+.st-page {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 32px 24px 60px;
+}
+
+.st-page.st-page-narrow {
+  max-width: 760px;
+}
+
+.st-page h1 {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0 0 4px;
+}
+
+.st-page .st-subtitle {
+  color: var(--textMuted);
+  font-size: 14px;
+  margin: 0;
+}
+
+/* Cards */
+.st-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radiusLg);
+  box-shadow: var(--shadowSm);
+  padding: 20px;
+}
+
+.st-card h2 {
+  font-size: 15px;
+  font-weight: 700;
+  margin: 0;
+}
+
+/* Buttons */
+.st-btn {
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 9px 16px;
+  border: none;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.st-btn-primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.st-btn-primary:hover {
+  background: var(--accentHover);
+}
+
+.st-btn-primary:disabled {
+  background: var(--borderStrong);
+  cursor: not-allowed;
+}
+
+.st-btn-secondary {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text2);
+  font-weight: 600;
+}
+
+.st-btn-secondary:hover {
+  background: var(--surface2);
+}
+
+.st-btn-destructive {
+  color: var(--statusBad);
+}
+
+/* Forms */
+.st-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text2);
+  margin-bottom: 6px;
+}
+
+.st-input,
+.st-select {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text2);
+  background: var(--surface);
+  transition: border-color 160ms ease;
+}
+
+.st-input:focus,
+.st-select:focus,
+textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+
+/* Status pill */
+.st-pill {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: var(--radiusPill);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+}
+
+/* Alerts */
+.st-alert-error {
+  background: var(--statusBadBg);
+  color: var(--statusBad);
+  font-size: 13px;
+  padding: 10px 12px;
+  border-radius: 8px;
+}
+
+@media (max-width: 760px) {
+  .st-nav {
+    display: none;
+  }
+
+  .st-menu-btn {
+    display: flex;
+  }
+
+  .st-page {
+    padding: 20px 16px 40px;
+  }
+}

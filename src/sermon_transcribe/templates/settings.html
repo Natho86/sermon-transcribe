@@ -1,620 +1,506 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
-    <title>Settings - Sermon Transcription Service</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎙️</text></svg>">
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+{% extends "base.html" %}
+{% set active_page = 'settings' %}
+{% block title %}Settings - Sermon Transcribe{% endblock %}
+{% block head %}
+<style>
+    .st-section { margin-bottom: 20px; }
+    .st-section-desc { font-size: 13px; color: var(--textMuted); margin: 0 0 16px; line-height: 1.6; }
 
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: #F8FAFC;
-            min-height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: flex-start;
-            padding: 24px;
-        }
+    .st-key-list { display: flex; flex-direction: column; gap: 10px; }
 
-        .dashboard {
-            width: 100%;
-            max-width: 1500px;
-            display: grid;
-            grid-template-columns: 220px 1fr;
-            gap: 24px;
-        }
+    .st-key-card {
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 14px 16px;
+        background: var(--surface);
+        transition: border-color 160ms ease, background-color 160ms ease;
+    }
+    .st-key-card.enabled { border-color: var(--accent); background: var(--accentSoft); }
 
-        .sidebar {
-            background: #111827;
-            border-radius: 12px;
-            color: #e5e7eb;
-            padding: 24px 16px;
-            min-height: 100%;
-        }
+    .st-key-card-main {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 12px;
+        flex-wrap: wrap;
+    }
 
-        .sidebar-nav { display: flex; flex-direction: column; gap: 8px; }
+    .st-key-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+    .st-key-label {
+        font-weight: 600;
+        font-size: 14px;
+        color: var(--text);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
 
-        .sidebar-link {
-            display: block;
-            padding: 10px 12px;
-            border-radius: 8px;
-            color: #e5e7eb;
-            text-decoration: none;
-            font-size: 14px;
-            font-weight: 600;
-            transition: background-color 0.2s ease, color 0.2s ease;
-        }
+    .st-badge {
+        font-size: 11px;
+        padding: 3px 10px;
+        border-radius: var(--radiusPill);
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: .03em;
+    }
+    .st-badge-active { background: var(--statusOkBg); color: var(--statusOk); }
+    .st-badge-inactive { background: var(--surface2); color: var(--textMuted); }
+    .st-badge-anthropic { background: var(--statusWarnBg); color: var(--statusWarn); }
+    .st-badge-openrouter { background: var(--statusOkBg); color: var(--statusOk); }
+    .st-badge-openai { background: var(--accentSoft); color: var(--accent); }
 
-        .sidebar-link:hover { background: #1f2937; color: #fff; }
-        .sidebar-link.active { background: #2563eb; color: #fff; }
+    .st-key-masked { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--textMuted); }
+    .st-key-model { font-size: 12px; color: var(--text2); margin-top: 2px; }
+    .st-key-verify-result { font-size: 12px; margin-top: 4px; }
+    .st-key-verify-result .ok { color: var(--statusOk); }
+    .st-key-verify-result .bad { color: var(--statusBad); }
+    .st-key-verify-result .warn { color: var(--statusWarn); }
 
-        .container {
-            background: white;
-            border-radius: 12px;
-            box-shadow: 0 1px 2px rgba(16,24,40,.04), 0 8px 24px rgba(16,24,40,.06);
-            padding: 40px;
-        }
+    .st-key-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 
-        h1 { color: #111827; font-size: 1.75em; margin-bottom: 6px; }
-        .subtitle { color: #6b7280; margin-bottom: 32px; font-size: 0.95em; }
+    .st-toggle-wrap { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text2); font-weight: 600; }
+    .st-toggle { position: relative; width: 38px; height: 22px; cursor: pointer; }
+    .st-toggle input { opacity: 0; width: 0; height: 0; }
+    .st-toggle-slider {
+        position: absolute; inset: 0; background: var(--borderStrong);
+        border-radius: 12px; transition: background-color 160ms ease;
+    }
+    .st-toggle-slider::before {
+        content: ''; position: absolute;
+        width: 16px; height: 16px; left: 3px; top: 3px;
+        background: #fff; border-radius: 50%;
+        transition: transform 160ms ease; box-shadow: 0 1px 3px rgba(0,0,0,.2);
+    }
+    .st-toggle input:checked + .st-toggle-slider { background: var(--accent); }
+    .st-toggle input:checked + .st-toggle-slider::before { transform: translateX(16px); }
 
-        .section { margin-bottom: 40px; }
-        .section-title { font-size: 1.1em; font-weight: 700; color: #111827; margin-bottom: 4px; }
-        .section-desc { font-size: 0.875em; color: #6b7280; margin-bottom: 16px; }
+    .st-btn-sm { padding: 6px 12px; font-size: 12px; border-radius: 7px; }
 
-        /* Key list */
-        .key-list { display: flex; flex-direction: column; gap: 12px; }
+    .st-add-key-form {
+        border: 1px dashed var(--borderStrong); border-radius: 10px;
+        padding: 16px; background: var(--surface); display: none;
+    }
+    .st-add-key-form.visible { display: block; }
 
-        .key-card {
-            border: 1px solid #e5e7eb;
-            border-radius: 10px;
-            padding: 16px 20px;
-            background: #fff;
-            transition: border-color 0.2s;
-        }
-        .key-card.enabled { border-color: #2563eb; background: #eff6ff; }
-        .key-card:hover { border-color: #93c5fd; }
+    .st-form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+    .st-form-group { display: flex; flex-direction: column; gap: 6px; }
 
-        .key-card-main {
-            display: grid;
-            grid-template-columns: 1fr auto;
-            gap: 12px;
-            align-items: start;
-        }
+    .st-form-actions { display: flex; gap: 8px; margin-top: 4px; }
 
-        .key-info { display: flex; flex-direction: column; gap: 4px; }
-        .key-label {
-            font-weight: 700;
-            font-size: 0.95em;
-            color: #111827;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
+    .st-edit-form { display: none; border-top: 1px solid var(--border); margin-top: 12px; padding-top: 12px; }
+    .st-edit-form.visible { display: block; }
 
-        .badge {
-            font-size: 0.7em;
-            padding: 2px 8px;
-            border-radius: 999px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-        }
-        .badge-active { background: #2563eb; color: #fff; }
-        .badge-inactive { background: #e5e7eb; color: #6b7280; }
-        .badge-anthropic { background: #fef3c7; color: #92400e; }
-        .badge-openrouter { background: #f0fdf4; color: #166534; }
-        .badge-openai { background: #ede9fe; color: #5b21b6; }
+    .st-model-fetch-wrap { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+    .st-model-fetch-wrap select { flex: 1; }
 
-        .key-masked { font-family: monospace; font-size: 0.875em; color: #6b7280; }
-        .key-model { font-size: 0.8em; color: #374151; margin-top: 2px; }
-        .key-verify-result { font-size: 0.8em; margin-top: 4px; }
+    .st-env-notice {
+        display: flex; align-items: center; gap: 12px; padding: 14px 16px;
+        border: 1px solid var(--border); border-radius: 10px; background: var(--surface2);
+        font-size: 13px; color: var(--text2); margin-bottom: 14px;
+    }
+    .st-env-notice .st-env-icon { font-size: 20px; }
 
-        .key-actions {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-            align-items: center;
-        }
+    .st-spinner {
+        display: inline-block; width: 13px; height: 13px;
+        border: 2px solid currentColor; border-right-color: transparent;
+        border-radius: 50%; animation: st-spin 0.7s linear infinite; vertical-align: middle;
+    }
+    @keyframes st-spin { to { transform: rotate(360deg); } }
 
-        /* Toggle switch */
-        .toggle-wrap { display: flex; align-items: center; gap: 8px; font-size: 0.85em; color: #374151; font-weight: 600; }
-        .toggle { position: relative; width: 42px; height: 24px; cursor: pointer; }
-        .toggle input { opacity: 0; width: 0; height: 0; }
-        .toggle-slider {
-            position: absolute; inset: 0; background: #d1d5db;
-            border-radius: 12px; transition: background 0.2s;
-        }
-        .toggle-slider::before {
-            content: ''; position: absolute;
-            width: 18px; height: 18px; left: 3px; top: 3px;
-            background: white; border-radius: 50%;
-            transition: transform 0.2s; box-shadow: 0 1px 3px rgba(0,0,0,.2);
-        }
-        .toggle input:checked + .toggle-slider { background: #2563eb; }
-        .toggle input:checked + .toggle-slider::before { transform: translateX(18px); }
+    .st-toast {
+        position: fixed; bottom: 24px; right: 24px; padding: 12px 18px;
+        border-radius: 8px; font-size: 13px; font-weight: 600; color: #fff;
+        opacity: 0; transform: translateY(8px);
+        transition: opacity 160ms ease, transform 160ms ease;
+        pointer-events: none; z-index: 999;
+    }
+    .st-toast.show { opacity: 1; transform: translateY(0); }
+    .st-toast-success { background: var(--statusOk); }
+    .st-toast-error { background: var(--statusBad); }
 
-        /* Buttons */
-        .btn {
-            padding: 8px 14px; border-radius: 8px; font-size: 0.825em;
-            font-weight: 600; cursor: pointer; border: none;
-            transition: all 0.2s; white-space: nowrap;
-        }
-        .btn:disabled { opacity: 0.6; cursor: not-allowed; }
-        .btn-primary { background: #2563eb; color: white; }
-        .btn-primary:hover:not(:disabled) { background: #1d4ed8; }
-        .btn-outline { background: white; color: #374151; border: 1px solid #d1d5db; }
-        .btn-outline:hover:not(:disabled) { background: #f9fafb; border-color: #9ca3af; }
-        .btn-danger { background: #ef4444; color: white; }
-        .btn-danger:hover:not(:disabled) { background: #dc2626; }
-        .btn-sm { padding: 6px 10px; font-size: 0.775em; }
+    @media (max-width: 760px) {
+        .st-form-row { grid-template-columns: 1fr; }
+        .st-key-card-main { flex-direction: column; }
+    }
+</style>
+{% endblock %}
+{% block content %}
+<div class="st-page st-page-narrow">
+    <h1>Settings</h1>
+    <p class="st-subtitle">Manage AI provider API keys for transcript cleanup and summarization.</p>
 
-        /* Add / edit forms */
-        .add-key-form {
-            border: 1px dashed #d1d5db; border-radius: 10px;
-            padding: 20px; background: #f9fafb; display: none;
-        }
-        .add-key-form.visible { display: block; }
+    <div class="st-card st-section" style="margin-top:24px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+            <h2>API keys</h2>
+        </div>
+        <p class="st-section-desc">
+            Only one key can be active at a time. Supported providers: <strong>Anthropic</strong> (direct), <strong>OpenAI</strong> (GPT-4o and others), and <strong>OpenRouter</strong> (access 200+ models).
+            For OpenAI and OpenRouter keys, click <em>Verify &amp; load models</em> to pick a specific model.
+        </p>
 
-        .form-row {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 16px;
-            margin-bottom: 14px;
-        }
-        .form-row.three { grid-template-columns: 1fr 1fr 1fr; }
+        <div id="envNotice" class="st-env-notice" style="display:none;">
+            <span class="st-env-icon">🔑</span>
+            <div>
+                <strong>Environment key configured</strong> &mdash;
+                An <code>ANTHROPIC_API_KEY</code> is set via environment variable and will be used as
+                a fallback when no key below is enabled.
+            </div>
+        </div>
 
-        .form-group { display: flex; flex-direction: column; gap: 6px; }
-        .form-group label { font-size: 0.825em; font-weight: 600; color: #374151; }
+        <div id="keyList" class="st-key-list">
+            <div style="color:var(--textMuted); font-size:13px;">Loading keys…</div>
+        </div>
 
-        input[type="text"],
-        input[type="password"],
-        select {
-            padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px;
-            font-size: 0.9em; font-family: inherit; transition: border-color 0.2s; background: white;
-        }
-        input[type="text"]:focus,
-        input[type="password"]:focus,
-        select:focus {
-            outline: none; border-color: #2563eb;
-            box-shadow: 0 0 0 3px rgba(37,99,235,.12);
-        }
+        <div style="margin-top: 16px;">
+            <button class="st-btn st-btn-secondary" onclick="toggleAddForm()">+ Add key</button>
+        </div>
 
-        .form-actions { display: flex; gap: 10px; margin-top: 4px; }
-
-        .edit-form { display: none; border-top: 1px solid #e5e7eb; margin-top: 14px; padding-top: 14px; }
-        .edit-form.visible { display: block; }
-        .edit-form .form-row { grid-template-columns: 1fr 1fr; }
-
-        /* Model selector */
-        .model-fetch-wrap {
-            display: flex; align-items: center; gap: 8px; margin-top: 6px;
-        }
-        .model-fetch-wrap select { flex: 1; }
-
-        /* Env key notice */
-        .env-notice {
-            display: flex; align-items: center; gap: 12px; padding: 14px 16px;
-            border: 1px solid #e5e7eb; border-radius: 10px; background: #f9fafb;
-            font-size: 0.875em; color: #374151; margin-bottom: 14px;
-        }
-        .env-notice .env-icon { font-size: 1.4em; }
-
-        /* Spinner */
-        .spinner {
-            display: inline-block; width: 14px; height: 14px;
-            border: 2px solid currentColor; border-right-color: transparent;
-            border-radius: 50%; animation: spin 0.7s linear infinite; vertical-align: middle;
-        }
-        @keyframes spin { to { transform: rotate(360deg); } }
-
-        /* Toast */
-        .toast {
-            position: fixed; bottom: 24px; right: 24px; padding: 12px 18px;
-            border-radius: 8px; font-size: 0.875em; font-weight: 600; color: white;
-            opacity: 0; transform: translateY(8px);
-            transition: opacity 0.2s, transform 0.2s;
-            pointer-events: none; z-index: 999;
-        }
-        .toast.show { opacity: 1; transform: translateY(0); }
-        .toast-success { background: #16a34a; }
-        .toast-error { background: #dc2626; }
-
-        @media (max-width: 980px) {
-            .dashboard { grid-template-columns: 1fr; }
-            .sidebar { min-height: auto; }
-            .form-row, .form-row.three { grid-template-columns: 1fr; }
-            .key-card-main { grid-template-columns: 1fr; }
-        }
-    </style>
-</head>
-<body>
-    <div class="dashboard">
-        <aside class="sidebar">
-            <nav class="sidebar-nav" aria-label="Sidebar navigation">
-                <a href="{{ url_for('index') }}" class="sidebar-link">Dashboard</a>
-                <a href="{{ url_for('settings') }}" class="sidebar-link active">Settings</a>
-                <a href="{{ url_for('logout') }}" class="sidebar-link">Logout</a>
-            </nav>
-        </aside>
-
-        <div class="container">
-            <h1>Settings</h1>
-            <p class="subtitle">Manage AI provider API keys for transcript cleanup and summarization.</p>
-
-            <div class="section">
-                <div class="section-title">AI Provider API Keys</div>
-                <div class="section-desc">
-                    Only one key can be active at a time. Supported providers: <strong>Anthropic</strong> (direct), <strong>OpenAI</strong> (GPT-4o and others), and <strong>OpenRouter</strong> (access 200+ models).
-                    For OpenAI and OpenRouter keys, click <em>Verify &amp; load models</em> to pick a specific model.
+        <!-- Add key form -->
+        <div class="st-add-key-form" id="addKeyForm" style="margin-top: 16px;">
+            <div class="st-form-row">
+                <div class="st-form-group">
+                    <label class="st-label" for="newLabel">Label</label>
+                    <input class="st-input" type="text" id="newLabel" placeholder="Label (e.g. Team key)" maxlength="80">
                 </div>
-
-                <div id="envNotice" class="env-notice" style="display:none;">
-                    <span class="env-icon">🔑</span>
-                    <div>
-                        <strong>Environment key configured</strong> &mdash;
-                        An <code>ANTHROPIC_API_KEY</code> is set via environment variable and will be used as
-                        a fallback when no key below is enabled.
-                    </div>
+                <div class="st-form-group">
+                    <label class="st-label" for="newProvider">Provider</label>
+                    <select class="st-select" id="newProvider" onchange="onNewProviderChange()">
+                        <option value="anthropic">Anthropic (Claude)</option>
+                        <option value="openai">OpenAI (GPT)</option>
+                        <option value="openrouter">OpenRouter</option>
+                    </select>
                 </div>
+            </div>
+            <div class="st-form-group" style="margin-bottom: 10px;">
+                <label class="st-label" for="newKey">API key</label>
+                <input class="st-input" type="password" id="newKey" placeholder="sk-..." autocomplete="off">
+            </div>
 
-                <div id="keyList" class="key-list">
-                    <div style="color:#6b7280; font-size:0.9em;">Loading keys…</div>
+            <!-- Model selector — shown for OpenRouter / OpenAI -->
+            <div class="st-form-group" id="newModelWrap" style="margin-bottom: 10px; display:none;">
+                <label class="st-label">Model</label>
+                <div class="st-model-fetch-wrap">
+                    <select class="st-select" id="newModel">
+                        <option value="">— verify key to load models —</option>
+                    </select>
+                    <button class="st-btn st-btn-secondary st-btn-sm" type="button" onclick="fetchModelsForNew()">
+                        Verify &amp; load models
+                    </button>
                 </div>
+                <div id="newModelStatus" style="font-size:12px; margin-top:4px; color:var(--textMuted);"></div>
+            </div>
 
-                <div style="margin-top: 16px;">
-                    <button class="btn btn-outline" onclick="toggleAddForm()">+ Add API Key</button>
-                </div>
+            <!-- Anthropic: optional manual model override -->
+            <div class="st-form-group" id="newAnthropicModelWrap" style="margin-bottom: 12px;">
+                <label class="st-label" for="newAnthropicModel">Model <span style="font-weight:400; color:var(--textMuted);">(optional — leave blank for default)</span></label>
+                <input class="st-input" type="text" id="newAnthropicModel" placeholder="e.g. claude-opus-4-8">
+            </div>
 
-                <!-- Add key form -->
-                <div class="add-key-form" id="addKeyForm" style="margin-top: 16px;">
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="newLabel">Label</label>
-                            <input type="text" id="newLabel" placeholder="e.g. My OpenRouter Key" maxlength="80">
-                        </div>
-                        <div class="form-group">
-                            <label for="newProvider">Provider</label>
-                            <select id="newProvider" onchange="onNewProviderChange()">
-                                <option value="anthropic">Anthropic (Claude)</option>
-                                <option value="openai">OpenAI (GPT)</option>
-                                <option value="openrouter">OpenRouter</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="form-group" style="margin-bottom: 14px;">
-                        <label for="newKey">API Key</label>
-                        <input type="password" id="newKey" placeholder="Paste your API key here…" autocomplete="off">
-                    </div>
-
-                    <!-- Model selector — shown for OpenRouter (and optionally Anthropic) -->
-                    <div class="form-group" id="newModelWrap" style="margin-bottom: 14px; display:none;">
-                        <label>Model</label>
-                        <div class="model-fetch-wrap">
-                            <select id="newModel">
-                                <option value="">— verify key to load models —</option>
-                            </select>
-                            <button class="btn btn-outline btn-sm" type="button" onclick="fetchModelsForNew()">
-                                Verify &amp; load models
-                            </button>
-                        </div>
-                        <div id="newModelStatus" style="font-size:0.8em; margin-top:4px; color:#6b7280;"></div>
-                    </div>
-
-                    <!-- Anthropic: optional manual model override -->
-                    <div class="form-group" id="newAnthropicModelWrap" style="margin-bottom: 14px;">
-                        <label for="newAnthropicModel">Model <span style="font-weight:400; color:#6b7280;">(optional — leave blank for default)</span></label>
-                        <input type="text" id="newAnthropicModel" placeholder="e.g. claude-opus-4-8">
-                    </div>
-
-                    <div class="form-actions">
-                        <button class="btn btn-primary" onclick="addKey()">Save Key</button>
-                        <button class="btn btn-outline" onclick="toggleAddForm()">Cancel</button>
-                    </div>
-                </div>
+            <div class="st-form-actions">
+                <button class="st-btn st-btn-primary" onclick="addKey()">Save key</button>
+                <button class="st-btn st-btn-secondary" onclick="toggleAddForm()">Cancel</button>
             </div>
         </div>
     </div>
+</div>
 
-    <div class="toast" id="toast"></div>
+<div class="st-toast" id="toast"></div>
+{% endblock %}
+{% block scripts %}
+<script>
+    let keysData = [];
 
-    <script>
-        let keysData = [];
-
-        // ── Load & render ─────────────────────────────────────────────────────
-        async function loadKeys() {
-            try {
-                const resp = await fetch('/api/settings/keys');
-                const data = await resp.json();
-                keysData = data.keys || [];
-                document.getElementById('envNotice').style.display =
-                    data.env_key_configured ? 'flex' : 'none';
-                renderKeys();
-            } catch {
-                document.getElementById('keyList').innerHTML =
-                    '<div style="color:#dc2626;">Failed to load keys.</div>';
-            }
+    // ── Load & render ─────────────────────────────────────────────────────
+    async function loadKeys() {
+        try {
+            const resp = await fetch('/api/settings/keys');
+            const data = await resp.json();
+            keysData = data.keys || [];
+            document.getElementById('envNotice').style.display =
+                data.env_key_configured ? 'flex' : 'none';
+            renderKeys();
+        } catch {
+            document.getElementById('keyList').innerHTML =
+                '<div style="color:var(--statusBad);">Failed to load keys.</div>';
         }
+    }
 
-        function renderKeys() {
-            const list = document.getElementById('keyList');
-            if (!keysData.length) {
-                list.innerHTML = '<div style="color:#6b7280; font-size:0.9em;">No API keys added yet.</div>';
-                return;
-            }
-            list.innerHTML = keysData.map(k => buildCard(k)).join('');
+    function renderKeys() {
+        const list = document.getElementById('keyList');
+        if (!keysData.length) {
+            list.innerHTML = '<div style="color:var(--textMuted); font-size:13px;">No API keys added yet.</div>';
+            return;
         }
+        list.innerHTML = keysData.map(k => buildCard(k)).join('');
+    }
 
-        function buildCard(k) {
-            const providerBadgeMap = {openrouter: 'badge-openrouter', openai: 'badge-openai'};
-            const providerBadgeClass = providerBadgeMap[k.provider] || 'badge-anthropic';
-            const providerLabelMap = {openrouter: 'OpenRouter', openai: 'OpenAI'};
-            const providerLabel = providerLabelMap[k.provider] || 'Anthropic';
-            const modelLine = k.model
-                ? `<div class="key-model">Model: <code>${escHtml(k.model)}</code></div>` : '';
+    function buildCard(k) {
+        const providerBadgeMap = {openrouter: 'st-badge-openrouter', openai: 'st-badge-openai'};
+        const providerBadgeClass = providerBadgeMap[k.provider] || 'st-badge-anthropic';
+        const providerLabelMap = {openrouter: 'OpenRouter', openai: 'OpenAI'};
+        const providerLabel = providerLabelMap[k.provider] || 'Anthropic';
+        const modelLine = k.model
+            ? `<div class="st-key-model">Model: <code>${escHtml(k.model)}</code></div>` : '';
 
-            return `
-<div class="key-card ${k.enabled ? 'enabled' : ''}" id="card-${k.id}">
-    <div class="key-card-main">
-        <div class="key-info">
-            <div class="key-label">
+        return `
+<div class="st-key-card ${k.enabled ? 'enabled' : ''}" id="card-${k.id}">
+    <div class="st-key-card-main">
+        <div class="st-key-info">
+            <div class="st-key-label">
                 ${escHtml(k.label)}
-                <span class="badge ${providerBadgeClass}">${providerLabel}</span>
-                <span class="badge ${k.enabled ? 'badge-active' : 'badge-inactive'}">${k.enabled ? 'Active' : 'Inactive'}</span>
+                <span class="st-badge ${providerBadgeClass}">${providerLabel}</span>
+                <span class="st-badge ${k.enabled ? 'st-badge-active' : 'st-badge-inactive'}">${k.enabled ? 'Active' : 'Inactive'}</span>
             </div>
-            <div class="key-masked">${escHtml(k.masked_key)}</div>
+            <div class="st-key-masked">${escHtml(k.masked_key)}</div>
             ${modelLine}
-            <div class="key-verify-result" id="verify-${k.id}"></div>
+            <div class="st-key-verify-result" id="verify-${k.id}"></div>
 
             <!-- Inline edit form -->
-            <div class="edit-form" id="edit-${k.id}">
-                <div class="form-row" style="margin-bottom:14px;">
-                    <div class="form-group">
-                        <label>Label</label>
-                        <input type="text" id="edit-label-${k.id}" value="${escHtml(k.label)}" maxlength="80">
+            <div class="st-edit-form" id="edit-${k.id}">
+                <div class="st-form-row" style="margin-bottom:10px;">
+                    <div class="st-form-group">
+                        <label class="st-label">Label</label>
+                        <input class="st-input" type="text" id="edit-label-${k.id}" value="${escHtml(k.label)}" maxlength="80">
                     </div>
-                    <div class="form-group">
-                        <label>New API Key <span style="font-weight:400;color:#6b7280;">(leave blank to keep current)</span></label>
-                        <input type="password" id="edit-key-${k.id}" placeholder="Paste new key…" autocomplete="off">
+                    <div class="st-form-group">
+                        <label class="st-label">New API key <span style="font-weight:400;color:var(--textMuted);">(leave blank to keep current)</span></label>
+                        <input class="st-input" type="password" id="edit-key-${k.id}" placeholder="Paste new key…" autocomplete="off">
                     </div>
                 </div>
-                <div class="form-group" style="margin-bottom:14px;" id="edit-model-group-${k.id}">
-                    <label>Model</label>
+                <div class="st-form-group" style="margin-bottom:10px;" id="edit-model-group-${k.id}">
+                    <label class="st-label">Model</label>
                     ${(k.provider === 'openrouter' || k.provider === 'openai')
-                        ? `<div class="model-fetch-wrap">
-                               <select id="edit-model-${k.id}">
+                        ? `<div class="st-model-fetch-wrap">
+                               <select class="st-select" id="edit-model-${k.id}">
                                    <option value="${escHtml(k.model || '')}">${escHtml(k.model || '— verify key to load models —')}</option>
                                </select>
-                               <button class="btn btn-outline btn-sm" type="button" onclick="fetchModelsForEdit('${k.id}')">Verify &amp; load models</button>
+                               <button class="st-btn st-btn-secondary st-btn-sm" type="button" onclick="fetchModelsForEdit('${k.id}')">Verify &amp; load models</button>
                            </div>
-                           <div id="edit-model-status-${k.id}" style="font-size:0.8em;margin-top:4px;color:#6b7280;"></div>`
-                        : `<input type="text" id="edit-model-${k.id}" value="${escHtml(k.model || '')}" placeholder="e.g. claude-opus-4-8 (leave blank for default)">`
+                           <div id="edit-model-status-${k.id}" style="font-size:12px;margin-top:4px;color:var(--textMuted);"></div>`
+                        : `<input class="st-input" type="text" id="edit-model-${k.id}" value="${escHtml(k.model || '')}" placeholder="e.g. claude-opus-4-8 (leave blank for default)">`
                     }
                 </div>
-                <div class="form-actions">
-                    <button class="btn btn-primary btn-sm" onclick="saveEdit('${k.id}')">Save</button>
-                    <button class="btn btn-outline btn-sm" onclick="cancelEdit('${k.id}')">Cancel</button>
+                <div class="st-form-actions">
+                    <button class="st-btn st-btn-primary st-btn-sm" onclick="saveEdit('${k.id}')">Save</button>
+                    <button class="st-btn st-btn-secondary st-btn-sm" onclick="cancelEdit('${k.id}')">Cancel</button>
                 </div>
             </div>
         </div>
 
-        <div class="key-actions">
-            <label class="toggle-wrap">
+        <div class="st-key-actions">
+            <label class="st-toggle-wrap">
                 <span>${k.enabled ? 'Enabled' : 'Enable'}</span>
-                <label class="toggle">
+                <label class="st-toggle">
                     <input type="checkbox" ${k.enabled ? 'checked' : ''}
                         onchange="toggleEnabled('${k.id}', this.checked)">
-                    <span class="toggle-slider"></span>
+                    <span class="st-toggle-slider"></span>
                 </label>
             </label>
-            <button class="btn btn-outline btn-sm" onclick="verifyKey('${k.id}')">Verify</button>
-            <button class="btn btn-outline btn-sm" onclick="openEdit('${k.id}')">Edit</button>
-            <button class="btn btn-danger btn-sm" onclick="deleteKey('${k.id}')">Delete</button>
+            <button class="st-btn st-btn-secondary st-btn-sm" onclick="verifyKey('${k.id}')">Verify</button>
+            <button class="st-btn st-btn-secondary st-btn-sm" onclick="openEdit('${k.id}')">Edit</button>
+            <button class="st-btn st-btn-secondary st-btn-sm st-btn-destructive" onclick="deleteKey('${k.id}')">Remove</button>
         </div>
     </div>
 </div>`;
+    }
+
+    // ── Add form helpers ───────────────────────────────────────────────────
+    function toggleAddForm() {
+        const form = document.getElementById('addKeyForm');
+        form.classList.toggle('visible');
+        if (form.classList.contains('visible')) document.getElementById('newLabel').focus();
+    }
+
+    function onNewProviderChange() {
+        const provider = document.getElementById('newProvider').value;
+        const hasModelDropdown = provider === 'openrouter' || provider === 'openai';
+        document.getElementById('newModelWrap').style.display = hasModelDropdown ? 'block' : 'none';
+        document.getElementById('newAnthropicModelWrap').style.display = provider === 'anthropic' ? 'block' : 'none';
+    }
+
+    async function fetchModelsForNew() {
+        const key = document.getElementById('newKey').value.trim();
+        const provider = document.getElementById('newProvider').value;
+        if (!key) { showToast('Enter an API key first', 'error'); return; }
+        const statusEl = document.getElementById('newModelStatus');
+        statusEl.innerHTML = '<span class="st-spinner"></span> Loading models…';
+        const models = await fetchModels(provider, key, statusEl);
+        if (models) populateModelSelect('newModel', models, '');
+    }
+
+    async function fetchModelsForEdit(id) {
+        const key = document.getElementById(`edit-key-${id}`).value.trim();
+        const entry = keysData.find(k => k.id === id);
+        const provider = entry ? entry.provider : 'openrouter';
+        const statusEl = document.getElementById(`edit-model-status-${id}`);
+        statusEl.innerHTML = '<span class="st-spinner"></span> Loading models…';
+        // Use stored key if no new key entered — send verify request via server
+        if (!key) {
+            statusEl.innerHTML = 'Enter a new API key above to refresh model list, or use Verify on the card to confirm the current key.';
+            return;
         }
-
-        // ── Add form helpers ───────────────────────────────────────────────────
-        function toggleAddForm() {
-            const form = document.getElementById('addKeyForm');
-            form.classList.toggle('visible');
-            if (form.classList.contains('visible')) document.getElementById('newLabel').focus();
+        const models = await fetchModels(provider, key, statusEl);
+        if (models) {
+            const current = document.getElementById(`edit-model-${id}`).value;
+            populateModelSelect(`edit-model-${id}`, models, current);
         }
+    }
 
-        function onNewProviderChange() {
-            const provider = document.getElementById('newProvider').value;
-            const hasModelDropdown = provider === 'openrouter' || provider === 'openai';
-            document.getElementById('newModelWrap').style.display = hasModelDropdown ? 'block' : 'none';
-            document.getElementById('newAnthropicModelWrap').style.display = provider === 'anthropic' ? 'block' : 'none';
-        }
-
-        async function fetchModelsForNew() {
-            const key = document.getElementById('newKey').value.trim();
-            const provider = document.getElementById('newProvider').value;
-            if (!key) { showToast('Enter an API key first', 'error'); return; }
-            const statusEl = document.getElementById('newModelStatus');
-            statusEl.innerHTML = '<span class="spinner"></span> Loading models…';
-            const models = await fetchModels(provider, key, statusEl);
-            if (models) populateModelSelect('newModel', models, '');
-        }
-
-        async function fetchModelsForEdit(id) {
-            const key = document.getElementById(`edit-key-${id}`).value.trim();
-            const entry = keysData.find(k => k.id === id);
-            const provider = entry ? entry.provider : 'openrouter';
-            const statusEl = document.getElementById(`edit-model-status-${id}`);
-            statusEl.innerHTML = '<span class="spinner"></span> Loading models…';
-            // Use stored key if no new key entered — send verify request via server
-            if (!key) {
-                statusEl.innerHTML = 'Enter a new API key above to refresh model list, or use Verify on the card to confirm the current key.';
-                return;
-            }
-            const models = await fetchModels(provider, key, statusEl);
-            if (models) {
-                const current = document.getElementById(`edit-model-${id}`).value;
-                populateModelSelect(`edit-model-${id}`, models, current);
-            }
-        }
-
-        async function fetchModels(provider, apiKey, statusEl) {
-            // Temporarily save key to a throwaway call — we verify directly from the frontend
-            // via a lightweight endpoint that verifies without permanently storing the key.
-            // We re-use the /verify endpoint by temporarily creating a ghost — but since we
-            // don't want to store yet, we call a direct endpoint instead.
-            try {
-                const resp = await fetch('/api/settings/keys/verify-raw', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({provider, key: apiKey}),
-                });
-                const data = await resp.json();
-                if (data.valid) {
-                    const count = data.models ? data.models.length : 0;
-                    statusEl.innerHTML = `<span style="color:#16a34a;">&#10003; Valid — ${count} model(s) available</span>`;
-                    return data.models || [];
-                } else {
-                    statusEl.innerHTML = `<span style="color:#dc2626;">&#10007; ${escHtml(data.error || 'Invalid key')}</span>`;
-                    return null;
-                }
-            } catch {
-                statusEl.innerHTML = '<span style="color:#dc2626;">Verification failed</span>';
-                return null;
-            }
-        }
-
-        function populateModelSelect(selectId, models, currentValue) {
-            const sel = document.getElementById(selectId);
-            sel.innerHTML = '';
-            for (const m of models) {
-                const id = typeof m === 'string' ? m : m.id;
-                const name = typeof m === 'string' ? m : (m.name || m.id);
-                const opt = document.createElement('option');
-                opt.value = id;
-                opt.textContent = name !== id ? `${name} (${id})` : id;
-                if (id === currentValue) opt.selected = true;
-                sel.appendChild(opt);
-            }
-            if (!currentValue && sel.options.length) sel.options[0].selected = true;
-        }
-
-        async function addKey() {
-            const label = document.getElementById('newLabel').value.trim();
-            const provider = document.getElementById('newProvider').value;
-            const key = document.getElementById('newKey').value.trim();
-            let model = '';
-            if (provider === 'openrouter' || provider === 'openai') {
-                model = document.getElementById('newModel').value.trim();
-            } else {
-                model = document.getElementById('newAnthropicModel').value.trim();
-            }
-
-            if (!label) return showToast('Label is required', 'error');
-            if (!key) return showToast('API key is required', 'error');
-
-            const resp = await fetch('/api/settings/keys', {
+    async function fetchModels(provider, apiKey, statusEl) {
+        // Temporarily save key to a throwaway call — we verify directly from the frontend
+        // via a lightweight endpoint that verifies without permanently storing the key.
+        // We re-use the /verify endpoint by temporarily creating a ghost — but since we
+        // don't want to store yet, we call a direct endpoint instead.
+        try {
+            const resp = await fetch('/api/settings/keys/verify-raw', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({label, provider, key, model}),
+                body: JSON.stringify({provider, key: apiKey}),
             });
             const data = await resp.json();
-            if (data.success) {
-                document.getElementById('newLabel').value = '';
-                document.getElementById('newKey').value = '';
-                document.getElementById('newModel').innerHTML = '<option value="">— verify key to load models —</option>';
-                document.getElementById('newAnthropicModel').value = '';
-                document.getElementById('addKeyForm').classList.remove('visible');
-                showToast('Key added', 'success');
-                await loadKeys();
+            if (data.valid) {
+                const count = data.models ? data.models.length : 0;
+                statusEl.innerHTML = `<span class="ok">&#10003; Valid — ${count} model(s) available</span>`;
+                return data.models || [];
             } else {
-                showToast(data.error || 'Failed to add key', 'error');
+                statusEl.innerHTML = `<span class="bad">&#10007; ${escHtml(data.error || 'Invalid key')}</span>`;
+                return null;
             }
+        } catch {
+            statusEl.innerHTML = '<span class="bad">Verification failed</span>';
+            return null;
+        }
+    }
+
+    function populateModelSelect(selectId, models, currentValue) {
+        const sel = document.getElementById(selectId);
+        sel.innerHTML = '';
+        for (const m of models) {
+            const id = typeof m === 'string' ? m : m.id;
+            const name = typeof m === 'string' ? m : (m.name || m.id);
+            const opt = document.createElement('option');
+            opt.value = id;
+            opt.textContent = name !== id ? `${name} (${id})` : id;
+            if (id === currentValue) opt.selected = true;
+            sel.appendChild(opt);
+        }
+        if (!currentValue && sel.options.length) sel.options[0].selected = true;
+    }
+
+    async function addKey() {
+        const label = document.getElementById('newLabel').value.trim();
+        const provider = document.getElementById('newProvider').value;
+        const key = document.getElementById('newKey').value.trim();
+        let model = '';
+        if (provider === 'openrouter' || provider === 'openai') {
+            model = document.getElementById('newModel').value.trim();
+        } else {
+            model = document.getElementById('newAnthropicModel').value.trim();
         }
 
-        // ── Edit ──────────────────────────────────────────────────────────────
-        function openEdit(id) { document.getElementById(`edit-${id}`).classList.add('visible'); }
-        function cancelEdit(id) { document.getElementById(`edit-${id}`).classList.remove('visible'); }
+        if (!label) return showToast('Label is required', 'error');
+        if (!key) return showToast('API key is required', 'error');
 
-        async function saveEdit(id) {
-            const label = document.getElementById(`edit-label-${id}`).value.trim();
-            const key = document.getElementById(`edit-key-${id}`).value.trim();
-            const model = document.getElementById(`edit-model-${id}`).value.trim();
-            if (!label) return showToast('Label is required', 'error');
-            const body = {label, model};
-            if (key) body.key = key;
-            const resp = await fetch(`/api/settings/keys/${id}`, {
-                method: 'PUT',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(body),
-            });
+        const resp = await fetch('/api/settings/keys', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({label, provider, key, model}),
+        });
+        const data = await resp.json();
+        if (data.success) {
+            document.getElementById('newLabel').value = '';
+            document.getElementById('newKey').value = '';
+            document.getElementById('newModel').innerHTML = '<option value="">— verify key to load models —</option>';
+            document.getElementById('newAnthropicModel').value = '';
+            document.getElementById('addKeyForm').classList.remove('visible');
+            showToast('Key added', 'success');
+            await loadKeys();
+        } else {
+            showToast(data.error || 'Failed to add key', 'error');
+        }
+    }
+
+    // ── Edit ──────────────────────────────────────────────────────────────
+    function openEdit(id) { document.getElementById(`edit-${id}`).classList.add('visible'); }
+    function cancelEdit(id) { document.getElementById(`edit-${id}`).classList.remove('visible'); }
+
+    async function saveEdit(id) {
+        const label = document.getElementById(`edit-label-${id}`).value.trim();
+        const key = document.getElementById(`edit-key-${id}`).value.trim();
+        const model = document.getElementById(`edit-model-${id}`).value.trim();
+        if (!label) return showToast('Label is required', 'error');
+        const body = {label, model};
+        if (key) body.key = key;
+        const resp = await fetch(`/api/settings/keys/${id}`, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body),
+        });
+        const data = await resp.json();
+        if (data.success) { showToast('Key updated', 'success'); await loadKeys(); }
+        else showToast(data.error || 'Failed to update key', 'error');
+    }
+
+    // ── Enable / delete / verify ──────────────────────────────────────────
+    async function toggleEnabled(id, enable) {
+        const resp = await fetch(`/api/settings/keys/${id}`, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({enabled: enable}),
+        });
+        const data = await resp.json();
+        if (data.success) { showToast(enable ? 'Key enabled' : 'Key disabled', 'success'); await loadKeys(); }
+        else { showToast(data.error || 'Failed to update key', 'error'); await loadKeys(); }
+    }
+
+    async function deleteKey(id) {
+        if (!confirm('Delete this API key? This cannot be undone.')) return;
+        const resp = await fetch(`/api/settings/keys/${id}`, {method: 'DELETE'});
+        const data = await resp.json();
+        if (data.success) { showToast('Key deleted', 'success'); await loadKeys(); }
+        else showToast(data.error || 'Failed to delete', 'error');
+    }
+
+    async function verifyKey(id) {
+        const resultEl = document.getElementById(`verify-${id}`);
+        resultEl.innerHTML = '<span class="st-spinner"></span> Verifying…';
+        try {
+            const resp = await fetch(`/api/settings/keys/${id}/verify`, {method: 'POST'});
             const data = await resp.json();
-            if (data.success) { showToast('Key updated', 'success'); await loadKeys(); }
-            else showToast(data.error || 'Failed to update key', 'error');
-        }
-
-        // ── Enable / delete / verify ──────────────────────────────────────────
-        async function toggleEnabled(id, enable) {
-            const resp = await fetch(`/api/settings/keys/${id}`, {
-                method: 'PUT',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({enabled: enable}),
-            });
-            const data = await resp.json();
-            if (data.success) { showToast(enable ? 'Key enabled' : 'Key disabled', 'success'); await loadKeys(); }
-            else { showToast(data.error || 'Failed to update key', 'error'); await loadKeys(); }
-        }
-
-        async function deleteKey(id) {
-            if (!confirm('Delete this API key? This cannot be undone.')) return;
-            const resp = await fetch(`/api/settings/keys/${id}`, {method: 'DELETE'});
-            const data = await resp.json();
-            if (data.success) { showToast('Key deleted', 'success'); await loadKeys(); }
-            else showToast(data.error || 'Failed to delete', 'error');
-        }
-
-        async function verifyKey(id) {
-            const resultEl = document.getElementById(`verify-${id}`);
-            resultEl.innerHTML = '<span class="spinner"></span> Verifying…';
-            try {
-                const resp = await fetch(`/api/settings/keys/${id}/verify`, {method: 'POST'});
-                const data = await resp.json();
-                if (data.valid) {
-                    const entry = keysData.find(k => k.id === id);
-                    const hasModelList = entry && (entry.provider === 'openrouter' || entry.provider === 'openai');
-                    const count = data.models ? data.models.length : 0;
-                    const extra = hasModelList
-                        ? ` — ${count} model(s) available`
-                        : (count ? ` — ${count} model(s)` : '');
-                    resultEl.innerHTML = `<span style="color:#16a34a;">&#10003; Valid key${extra}</span>`;
-                    if (data.error) resultEl.innerHTML += ` <span style="color:#92400e;">(${escHtml(data.error)})</span>`;
-                } else {
-                    resultEl.innerHTML = `<span style="color:#dc2626;">&#10007; ${escHtml(data.error || 'Invalid key')}</span>`;
-                }
-            } catch {
-                resultEl.innerHTML = '<span style="color:#dc2626;">Verification failed</span>';
+            if (data.valid) {
+                const entry = keysData.find(k => k.id === id);
+                const hasModelList = entry && (entry.provider === 'openrouter' || entry.provider === 'openai');
+                const count = data.models ? data.models.length : 0;
+                const extra = hasModelList
+                    ? ` — ${count} model(s) available`
+                    : (count ? ` — ${count} model(s)` : '');
+                resultEl.innerHTML = `<span class="ok">&#10003; Valid key${extra}</span>`;
+                if (data.error) resultEl.innerHTML += ` <span class="warn">(${escHtml(data.error)})</span>`;
+            } else {
+                resultEl.innerHTML = `<span class="bad">&#10007; ${escHtml(data.error || 'Invalid key')}</span>`;
             }
+        } catch {
+            resultEl.innerHTML = '<span class="bad">Verification failed</span>';
         }
+    }
 
-        // ── Utilities ─────────────────────────────────────────────────────────
-        function escHtml(str) {
-            return String(str)
-                .replace(/&/g, '&amp;').replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-        }
+    // ── Utilities ─────────────────────────────────────────────────────────
+    function escHtml(str) {
+        return String(str)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
 
-        function showToast(msg, type) {
-            const toast = document.getElementById('toast');
-            toast.textContent = msg;
-            toast.className = `toast toast-${type} show`;
-            setTimeout(() => toast.classList.remove('show'), 3000);
-        }
+    function showToast(msg, type) {
+        const toast = document.getElementById('toast');
+        toast.textContent = msg;
+        toast.className = `st-toast st-toast-${type} show`;
+        setTimeout(() => toast.classList.remove('show'), 3000);
+    }
 
-        // Initialize provider visibility
-        onNewProviderChange();
-        loadKeys();
-    </script>
-</body>
-</html>
+    // Initialize provider visibility
+    onNewProviderChange();
+    loadKeys();
+</script>
+{% endblock %}
