@@ -93,6 +93,7 @@
 
     .st-model-fetch-wrap { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
     .st-model-fetch-wrap select { flex: 1; }
+    .st-model-filter { margin-top: 8px; }
 
     .st-env-notice {
         display: flex; align-items: center; gap: 12px; padding: 14px 16px;
@@ -181,13 +182,15 @@
             <div class="st-form-group" id="newModelWrap" style="margin-bottom: 10px; display:none;">
                 <label class="st-label">Model</label>
                 <div class="st-model-fetch-wrap">
-                    <select class="st-select" id="newModel">
+                    <select class="st-select" id="newModel" data-model-select="newModel">
                         <option value="">— verify key to load models —</option>
                     </select>
                     <button class="st-btn st-btn-secondary st-btn-sm" type="button" onclick="fetchModelsForNew()">
                         Verify &amp; load models
                     </button>
                 </div>
+                <input class="st-input st-model-filter" id="newModelFilter" type="search"
+                       placeholder="Filter models…" oninput="filterModelSelect('newModel', this.value)" autocomplete="off">
                 <div id="newModelStatus" style="font-size:12px; margin-top:4px; color:var(--textMuted);"></div>
             </div>
 
@@ -271,12 +274,14 @@
                 <div class="st-form-group" style="margin-bottom:10px;" id="edit-model-group-${k.id}">
                     <label class="st-label">Model</label>
                     ${(k.provider === 'openrouter' || k.provider === 'openai')
-                        ? `<div class="st-model-fetch-wrap">
-                               <select class="st-select" id="edit-model-${k.id}">
+                           ? `<div class="st-model-fetch-wrap">
+                               <select class="st-select" id="edit-model-${k.id}" data-model-select="edit-model-${k.id}">
                                    <option value="${escHtml(k.model || '')}">${escHtml(k.model || '— verify key to load models —')}</option>
                                </select>
                                <button class="st-btn st-btn-secondary st-btn-sm" type="button" onclick="fetchModelsForEdit('${k.id}')">Verify &amp; load models</button>
                            </div>
+                           <input class="st-input st-model-filter" id="edit-model-filter-${k.id}" type="search"
+                                  placeholder="Filter models…" oninput="filterModelSelect('edit-model-${k.id}', this.value)" autocomplete="off">
                            <div id="edit-model-status-${k.id}" style="font-size:12px;margin-top:4px;color:var(--textMuted);"></div>`
                         : `<input class="st-input" type="text" id="edit-model-${k.id}" value="${escHtml(k.model || '')}" placeholder="e.g. claude-opus-4-8 (leave blank for default)">`
                     }
@@ -389,18 +394,61 @@
     }
 
     function populateModelSelect(selectId, models, currentValue) {
+        modelCatalog[selectId] = models;
+        renderModelSelect(selectId, currentValue, getModelFilter(selectId));
+    }
+
+    const modelCatalog = {};
+
+    function getModelFilter(selectId) {
+        const filterId = selectId === 'newModel'
+            ? 'newModelFilter'
+            : selectId.replace(/^edit-model-/, 'edit-model-filter-');
+        return document.getElementById(filterId)?.value || '';
+    }
+
+    function filterModelSelect(selectId, filterText) {
+        const select = document.getElementById(selectId);
+        if (!select || !modelCatalog[selectId]) return;
+        const currentValue = select.value;
+        renderModelSelect(selectId, currentValue, filterText);
+    }
+
+    function renderModelSelect(selectId, currentValue, filterText) {
         const sel = document.getElementById(selectId);
+        const models = modelCatalog[selectId] || [];
+        const query = (filterText || '').trim().toLowerCase();
+        const filteredModels = models.filter(m => {
+            const id = typeof m === 'string' ? m : m.id;
+            const name = typeof m === 'string' ? m : (m.name || m.id);
+            return !query || `${name} ${id}`.toLowerCase().includes(query);
+        });
+
         sel.innerHTML = '';
-        for (const m of models) {
+        if (!filteredModels.length) {
+            const opt = document.createElement('option');
+            opt.textContent = query ? 'No matching models' : 'No models available';
+            opt.disabled = true;
+            opt.selected = true;
+            sel.appendChild(opt);
+            return;
+        }
+
+        let currentFound = false;
+        for (const m of filteredModels) {
             const id = typeof m === 'string' ? m : m.id;
             const name = typeof m === 'string' ? m : (m.name || m.id);
             const opt = document.createElement('option');
             opt.value = id;
             opt.textContent = name !== id ? `${name} (${id})` : id;
-            if (id === currentValue) opt.selected = true;
+            if (id === currentValue) {
+                opt.selected = true;
+                currentFound = true;
+            }
             sel.appendChild(opt);
         }
         if (!currentValue && sel.options.length) sel.options[0].selected = true;
+        if (currentValue && !currentFound) sel.selectedIndex = -1;
     }
 
     async function addKey() {
@@ -427,6 +475,8 @@
             document.getElementById('newLabel').value = '';
             document.getElementById('newKey').value = '';
             document.getElementById('newModel').innerHTML = '<option value="">— verify key to load models —</option>';
+            document.getElementById('newModelFilter').value = '';
+            delete modelCatalog.newModel;
             document.getElementById('newAnthropicModel').value = '';
             document.getElementById('addKeyForm').classList.remove('visible');
             showToast('Key added', 'success');
