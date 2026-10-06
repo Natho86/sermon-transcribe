@@ -335,12 +335,27 @@
         const provider = entry ? entry.provider : 'openrouter';
         const statusEl = document.getElementById(`edit-model-status-${id}`);
         statusEl.innerHTML = '<span class="st-spinner"></span> Loading models…';
-        // Use stored key if no new key entered — send verify request via server
-        if (!key) {
-            statusEl.innerHTML = 'Enter a new API key above to refresh model list, or use Verify on the card to confirm the current key.';
-            return;
+        let models;
+        if (key) {
+            models = await fetchModels(provider, key, statusEl);
+        } else {
+            // The key is deliberately masked in the keys API, so ask the
+            // authenticated server endpoint to verify the stored key instead
+            // of requiring the user to enter it again.
+            try {
+                const resp = await fetch(`/api/settings/keys/${id}/verify`, {method: 'POST'});
+                const data = await resp.json();
+                if (data.valid) {
+                    const count = data.models ? data.models.length : 0;
+                    statusEl.innerHTML = `<span class="ok">&#10003; Valid — ${count} model(s) available</span>`;
+                    models = data.models || [];
+                } else {
+                    statusEl.innerHTML = `<span class="bad">&#10007; ${escHtml(data.error || 'Invalid key')}</span>`;
+                }
+            } catch {
+                statusEl.innerHTML = '<span class="bad">Verification failed</span>';
+            }
         }
-        const models = await fetchModels(provider, key, statusEl);
         if (models) {
             const current = document.getElementById(`edit-model-${id}`).value;
             populateModelSelect(`edit-model-${id}`, models, current);
