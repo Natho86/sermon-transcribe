@@ -28,6 +28,7 @@ from sermon_transcribe.cleanup import (
     DEFAULT_MODEL,
     DEFAULT_OPENROUTER_MODEL,
     DEFAULT_OPENAI_MODEL,
+    SUMMARY_DISCLAIMER_TEXT,
 )
 from sermon_transcribe.io_utils import ensure_dir
 from sermon_transcribe.settings import (
@@ -570,7 +571,7 @@ def cleanup_transcript(job_id: str, result: TranscriptionResult, output_dir: Pat
         )
 
     summary_path = output_dir / f"{base_name}_summary.txt"
-    summary_path.write_text(apply_disclaimer(summary), encoding="utf-8")
+    summary_path.write_text(apply_disclaimer(summary, SUMMARY_DISCLAIMER_TEXT), encoding="utf-8")
 
     with jobs_lock:
         jobs[job_id]["text_path"] = str(cleaned_path.absolute())
@@ -1004,7 +1005,7 @@ def regenerate_cleaned_transcript(job_id: str):
                 )
 
             summary_path = output_dir / f"{base_name}_summary.txt"
-            summary_path.write_text(apply_disclaimer(summary), encoding="utf-8")
+            summary_path.write_text(apply_disclaimer(summary, SUMMARY_DISCLAIMER_TEXT), encoding="utf-8")
 
             with jobs_lock:
                 jobs[job_id]["summary_path"] = str(summary_path.absolute())
@@ -1728,7 +1729,7 @@ def upload_transcript():
                     )
 
                 summary_path = output_dir / f"{transcript_filename}_summary.txt"
-                summary_path.write_text(apply_disclaimer(summary), encoding="utf-8")
+                summary_path.write_text(apply_disclaimer(summary, SUMMARY_DISCLAIMER_TEXT), encoding="utf-8")
 
                 with jobs_lock:
                     jobs[job_id]["text_path"] = str(cleaned_path.absolute())
@@ -1773,6 +1774,12 @@ def list_jobs():
     job_list.sort(key=lambda x: x.get("created_at", ""), reverse=True)
 
     return jsonify({"jobs": job_list})
+
+
+@app.route("/summary-disclaimer")
+@login_required
+def summary_disclaimer():
+    return app.response_class(SUMMARY_DISCLAIMER_TEXT + "\n", mimetype="text/plain")
 
 
 @app.route("/download/<job_id>/<file_type>")

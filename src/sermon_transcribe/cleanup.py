@@ -35,6 +35,11 @@ DISCLAIMER_TEXT = (
     "For the most accurate representation of the message, we recommend listening to the "
     "original audio recording."
 )
+SUMMARY_DISCLAIMER_TEXT = (
+    "Please note: This summary text was created with the assistance of artificial "
+    "intelligence technology and may contain occasional errors or inaccuracies. "
+    "If you notice anything that doesn't seem quite right, please feel free to let us know."
+)
 
 
 class CreditBalanceError(RuntimeError):
@@ -541,11 +546,11 @@ def write_text(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def apply_disclaimer(text: str) -> str:
+def apply_disclaimer(text: str, disclaimer: str = DISCLAIMER_TEXT) -> str:
     cleaned = text.strip()
-    if cleaned.startswith(DISCLAIMER_TEXT):
+    if cleaned.startswith(disclaimer):
         return cleaned + "\n"
-    return f"{DISCLAIMER_TEXT}\n\n{cleaned}\n"
+    return f"{disclaimer}\n\n{cleaned}\n"
 
 
 def strip_disclaimer(text: str) -> str:
@@ -712,9 +717,12 @@ def main() -> None:
 
         if should_skip_summary:
             existing_summary = load_text(summary_path)
-            if not existing_summary.strip().startswith(DISCLAIMER_TEXT):
-                write_text(summary_path, apply_disclaimer(existing_summary))
-                print("  Added disclaimer to summary.", flush=True)
+            if not existing_summary.strip().startswith(SUMMARY_DISCLAIMER_TEXT):
+                write_text(
+                    summary_path,
+                    apply_disclaimer(strip_disclaimer(existing_summary), SUMMARY_DISCLAIMER_TEXT),
+                )
+                print("  Updated summary disclaimer.", flush=True)
             else:
                 print(f"  Skipping existing {readable_path(summary_path)}", flush=True)
             continue
@@ -729,7 +737,7 @@ def main() -> None:
                 timeout=args.timeout,
                 max_chars=args.summary_max_chars,
             )
-            write_text(summary_path, apply_disclaimer(summary))
+            write_text(summary_path, apply_disclaimer(summary, SUMMARY_DISCLAIMER_TEXT))
             print(f"  Wrote {readable_path(summary_path)}", flush=True)
         except CreditBalanceError as exc:
             print(f"  Summary failed: {exc}", file=sys.stderr)

@@ -122,7 +122,7 @@ Outputs:
 - Cleaned transcript: `*.txt` (same base name, no suffix)
 - Summary: `*_summary.txt`
 
-Both files include an AI transcription disclaimer at the top.
+The cleaned transcript and summary each open with an AI disclaimer. In the web app, open a completed job's actions menu and choose **View summary disclaimer** to preview or download the summary disclaimer on its own.
 
 Common options:
 - `--output /path/to/cleaned` - Write cleaned files elsewhere

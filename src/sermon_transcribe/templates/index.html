@@ -1166,7 +1166,10 @@
                         <a href="/review/${job.job_id}">Review &amp; edit</a>
                         <a href="#" class="view-file" data-url="/download/${job.job_id}/text" data-type="text" data-filename="${job.filename}">View transcript</a>
                         ${job.json_url ? `<a href="#" class="view-file" data-url="/download/${job.job_id}/json" data-type="json" data-filename="${job.filename}">View JSON</a>` : ''}
-                        ${job.summary_url ? `<a href="#" class="view-file" data-url="${job.summary_url}" data-type="summary" data-filename="${job.filename}">View summary</a>` : ''}
+                        ${job.summary_url ? `
+                            <a href="#" class="view-file" data-url="${job.summary_url}" data-type="summary" data-filename="${job.filename}">View summary</a>
+                            <a href="{{ url_for('summary_disclaimer') }}" class="view-file" data-url="{{ url_for('summary_disclaimer') }}" data-type="summary-disclaimer" data-filename="summary-disclaimer.txt">View summary disclaimer</a>
+                        ` : ''}
                         <div class="st-group-label">Download</div>
                         ${job.m4a_url ? `<a href="${job.m4a_url}" download>Download M4A</a>` : ''}
                         ${job.flac_url ? `<a href="${job.flac_url}" download>Download FLAC</a>` : ''}
@@ -1263,7 +1266,8 @@
         const typeLabels = {
             'text': 'Transcript',
             'json': 'JSON Data',
-            'summary': 'Summary'
+            'summary': 'Summary',
+            'summary-disclaimer': 'Summary disclaimer'
         };
         modalTitle.textContent = `${typeLabels[type] || 'File'} - ${filename}`;
 
