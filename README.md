@@ -74,6 +74,8 @@ In the dashboard, open **Process a folder** and navigate to a month such as `202
 
 Selected outputs replace matching files in the staging folder after generation. If a matching `_timestamps.txt` already exists, the WAV actions refresh it too. AI actions use the active provider in **Settings**. If you use rclone, stage the WAVs and their existing companions together, then upload the reviewed outputs after the jobs finish.
 
+In **Jobs**, open the **⋮** menu on a completed folder job to download individual outputs or choose **Download all files** for a ZIP. Downloads read from the staging folder. The app keeps folder job entries until it restarts or you remove them.
+
 ## Configuration
 
 ### Environment Variables (.env)

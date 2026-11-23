@@ -1408,8 +1408,33 @@
         setupJobsControls(sortedJobs);
     }
 
+    function jobActionsDropdown(job, idPrefix, content) {
+        return `
+            <div class="st-actions-dropdown" id="${idPrefix}-${job.job_id}">
+                <button class="st-actions-dropdown-btn" onclick="toggleDropdown(this)" aria-label="Job actions" aria-haspopup="true">⋮</button>
+                <div class="st-actions-dropdown-content">${content}</div>
+            </div>
+        `;
+    }
+
     function jobActionsMarkup(job, idPrefix) {
         if (job.folder_job) {
+            if (job.status === 'completed' && Object.keys(job.folder_downloads || {}).length) {
+                const labels = {
+                    text: 'Transcript', json: 'Timestamps JSON', timestamps_text: 'Timestamps text',
+                    summary: 'Summary', m4a: 'M4A', flac: 'FLAC',
+                };
+                const links = Object.entries(labels)
+                    .filter(([type]) => Object.hasOwn(job.folder_downloads, type))
+                    .map(([type, label]) => `<a href="/download/${job.job_id}/${type}" download>Download ${label}</a>`)
+                    .join('');
+                return jobActionsDropdown(job, idPrefix, `
+                    <div class="st-group-label">Download</div>
+                    ${links}
+                    <a href="/download/${job.job_id}/all" download>Download all files</a>
+                    <button class="delete-btn" data-job-id="${job.job_id}">Remove job</button>
+                `);
+            }
             if (job.status === 'queued' || (job.status === 'processing' && job.progress < 95)) {
                 return `<button class="st-cancel-btn cancel-btn" data-job-id="${job.job_id}">Cancel</button>`;
             }
@@ -1419,28 +1444,23 @@
             return '';
         }
         if (job.status === 'completed') {
-            return `
-                <div class="st-actions-dropdown" id="${idPrefix}-${job.job_id}">
-                    <button class="st-actions-dropdown-btn" onclick="toggleDropdown(this)" aria-label="Job actions" aria-haspopup="true">⋮</button>
-                    <div class="st-actions-dropdown-content">
-                        <div class="st-group-label">View</div>
-                        <a href="/review/${job.job_id}">Review &amp; edit</a>
-                        <a href="#" class="view-file" data-url="/download/${job.job_id}/text" data-type="text" data-filename="${job.filename}">View transcript</a>
-                        ${job.json_url ? `<a href="#" class="view-file" data-url="/download/${job.job_id}/json" data-type="json" data-filename="${job.filename}">View JSON</a>` : ''}
-                        ${job.summary_url ? `
-                            <a href="#" class="view-file" data-url="${job.summary_url}" data-type="summary" data-filename="${job.filename}">View summary</a>
-                            <a href="{{ url_for('summary_disclaimer') }}" class="view-file" data-url="{{ url_for('summary_disclaimer') }}" data-type="summary-disclaimer" data-filename="summary-disclaimer.txt">View summary disclaimer</a>
-                        ` : ''}
-                        <div class="st-group-label">Download</div>
-                        ${job.m4a_url ? `<a href="${job.m4a_url}" download>Download M4A</a>` : ''}
-                        ${job.flac_url ? `<a href="${job.flac_url}" download>Download FLAC</a>` : ''}
-                        <a href="#" class="download-all-btn" data-job-id="${job.job_id}">Download all files</a>
-                        <button class="reprocess-btn" data-job-id="${job.job_id}">Reprocess</button>
-                        <div class="st-group-label">Danger zone</div>
-                        <button class="delete-btn st-danger" data-job-id="${job.job_id}">Delete job</button>
-                    </div>
-                </div>
-            `;
+            return jobActionsDropdown(job, idPrefix, `
+                <div class="st-group-label">View</div>
+                <a href="/review/${job.job_id}">Review &amp; edit</a>
+                <a href="#" class="view-file" data-url="/download/${job.job_id}/text" data-type="text" data-filename="${job.filename}">View transcript</a>
+                ${job.json_url ? `<a href="#" class="view-file" data-url="/download/${job.job_id}/json" data-type="json" data-filename="${job.filename}">View JSON</a>` : ''}
+                ${job.summary_url ? `
+                    <a href="#" class="view-file" data-url="${job.summary_url}" data-type="summary" data-filename="${job.filename}">View summary</a>
+                    <a href="{{ url_for('summary_disclaimer') }}" class="view-file" data-url="{{ url_for('summary_disclaimer') }}" data-type="summary-disclaimer" data-filename="summary-disclaimer.txt">View summary disclaimer</a>
+                ` : ''}
+                <div class="st-group-label">Download</div>
+                ${job.m4a_url ? `<a href="${job.m4a_url}" download>Download M4A</a>` : ''}
+                ${job.flac_url ? `<a href="${job.flac_url}" download>Download FLAC</a>` : ''}
+                <a href="#" class="download-all-btn" data-job-id="${job.job_id}">Download all files</a>
+                <button class="reprocess-btn" data-job-id="${job.job_id}">Reprocess</button>
+                <div class="st-group-label">Danger zone</div>
+                <button class="delete-btn st-danger" data-job-id="${job.job_id}">Delete job</button>
+            `);
         } else if (job.status === 'queued' || job.status === 'processing') {
             return `<button class="st-cancel-btn cancel-btn" data-job-id="${job.job_id}">Cancel</button>`;
         } else if (job.status === 'failed' || job.status === 'cancelled') {

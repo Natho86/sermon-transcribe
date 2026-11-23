@@ -9,8 +9,9 @@ from dataclasses import replace
 from datetime import datetime
 from functools import partial
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from tempfile import TemporaryDirectory, TemporaryFile
 from typing import Dict, Optional
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from flask import Flask, jsonify, render_template, request, send_file, redirect, url_for, session
 from flask_socketio import SocketIO, emit
@@ -1760,6 +1761,11 @@ def verify_folder_job(plan: FolderJob):
         raise RuntimeError("A source file or output changed. Scan the folder and retry.")
 
 
+def folder_downloads(destinations: dict[str, Path]) -> dict[str, str]:
+    download_types = {"transcript": "text", "timestamps": "json"}
+    return {download_types.get(kind, kind): path.name for kind, path in destinations.items()}
+
+
 def process_folder_jobs(
     batch: list[tuple[str, FolderJob]], action: str, do_cleanup: bool, provider_info: Optional[dict]
 ):
@@ -1822,7 +1828,9 @@ def process_folder_jobs(
                 if cancelled:
                     emit_progress(job_id, "cancelled", 0, "Job cancelled by user")
                 else:
-                    emit_progress(job_id, "completed", 100, "Files saved to the sermon folder")
+                    emit_progress(job_id, "completed", 100, "Files saved to the sermon folder", {
+                        "folder_downloads": folder_downloads(plan.destinations),
+                    })
             except Exception as exc:
                 if is_job_cancelled(job_id):
                     emit_progress(job_id, "cancelled", 0, "Job cancelled by user")
@@ -1937,6 +1945,57 @@ def summary_disclaimer():
     return app.response_class(SUMMARY_DISCLAIMER_TEXT + "\n", mimetype="text/plain")
 
 
+def download_zip(paths: list[Path], filename: str):
+    # Keep the archive on disk for large audio files. The response closes it after streaming.
+    archive = TemporaryFile()
+    try:
+        with ZipFile(archive, "w", ZIP_DEFLATED) as zip_file:
+            for path in paths:
+                zip_file.write(path, path.name)
+        size = archive.tell()
+        archive.seek(0)
+        response = send_file(
+            archive, as_attachment=True, download_name=filename, mimetype="application/zip", conditional=False
+        )
+        response.content_length = size
+        return response.make_conditional(request.environ, accept_ranges=True, complete_length=size)
+    except Exception:
+        archive.close()
+        raise
+
+
+def download_folder_job(job: dict, file_type: str):
+    downloads = job.get("folder_downloads", {})
+    if job["status"] != "completed" or (file_type != "all" and file_type not in downloads):
+        return jsonify({"error": "File not found"}), 404
+
+    job_key = Path(job["folder_key"])
+    try:
+        _, folder = configured_folder(job_key.parent.as_posix())
+    except (ValueError, OSError):
+        return jsonify({"error": "Sermon folder unavailable"}), 404
+
+    names = downloads.values() if file_type == "all" else [downloads[file_type]]
+    paths = []
+    for name in names:
+        path = folder / name
+        try:
+            if file_version(path) is not None:
+                paths.append(path)
+        except (ValueError, OSError):
+            continue
+    if not paths:
+        return jsonify({"error": "No job files found in the sermon folder"}), 404
+
+    try:
+        if file_type == "all":
+            return download_zip(paths, f"{job_key.name}_complete.zip")
+        mimetype = {"m4a": "audio/mp4", "flac": "audio/flac"}.get(file_type)
+        return send_file(paths[0], as_attachment=True, mimetype=mimetype)
+    except OSError:
+        return jsonify({"error": "Could not read the job files in the sermon folder"}), 404
+
+
 @app.route("/download/<job_id>/<file_type>")
 @login_required
 def download(job_id: str, file_type: str):
@@ -1946,6 +2005,9 @@ def download(job_id: str, file_type: str):
 
     if not job:
         return jsonify({"error": "Job not found"}), 404
+
+    if job.get("folder_job"):
+        return download_folder_job(job, file_type)
 
     if file_type == "text" and "text_path" in job:
         return send_file(job["text_path"], as_attachment=True)
@@ -1958,57 +2020,16 @@ def download(job_id: str, file_type: str):
     elif file_type == "flac" and "flac_path" in job:
         return send_file(job["flac_path"], as_attachment=True, mimetype="audio/flac")
     elif file_type == "all":
-        # Create a zip file with all job files
-        import zipfile
-        import tempfile
-
-        with jobs_lock:
-            job = jobs.get(job_id)
-
-        if not job:
-            return jsonify({"error": "Job not found"}), 404
-
-        # Create temporary zip file
-        temp_zip = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
-
+        paths = [
+            Path(job[key]) for key in ("text_path", "json_path", "summary_path", "m4a_path", "flac_path")
+            if key in job and Path(job[key]).exists()
+        ]
+        base_name = job.get("filename", "transcription")
+        if base_name.endswith(('.mp3', '.wav', '.m4a', '.flac')):
+            base_name = Path(base_name).stem
         try:
-            with zipfile.ZipFile(temp_zip.name, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                # Add text file
-                if "text_path" in job and Path(job["text_path"]).exists():
-                    zipf.write(job["text_path"], Path(job["text_path"]).name)
-
-                # Add JSON file
-                if "json_path" in job and Path(job["json_path"]).exists():
-                    zipf.write(job["json_path"], Path(job["json_path"]).name)
-
-                # Add summary file
-                if "summary_path" in job and Path(job["summary_path"]).exists():
-                    zipf.write(job["summary_path"], Path(job["summary_path"]).name)
-
-                # Add M4A file
-                if "m4a_path" in job and Path(job["m4a_path"]).exists():
-                    zipf.write(job["m4a_path"], Path(job["m4a_path"]).name)
-
-                # Add FLAC file
-                if "flac_path" in job and Path(job["flac_path"]).exists():
-                    zipf.write(job["flac_path"], Path(job["flac_path"]).name)
-
-            # Get base filename for the zip
-            base_name = job.get("filename", "transcription")
-            if base_name.endswith(('.mp3', '.wav', '.m4a', '.flac')):
-                base_name = Path(base_name).stem
-
-            zip_filename = f"{base_name}_complete.zip"
-
-            return send_file(
-                temp_zip.name,
-                as_attachment=True,
-                download_name=zip_filename,
-                mimetype='application/zip'
-            )
+            return download_zip(paths, f"{base_name}_complete.zip")
         except Exception as e:
-            if Path(temp_zip.name).exists():
-                Path(temp_zip.name).unlink()
             return jsonify({"error": f"Failed to create zip: {str(e)}"}), 500
     else:
         return jsonify({"error": "File not found"}), 404
