@@ -6,8 +6,9 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from functools import partial
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Callable, Iterable, List, Optional
 
 from sermon_transcribe.io_utils import ensure_dir, readable_path
 
@@ -27,6 +28,8 @@ DEFAULT_RAW_SUFFIX = "_raw"
 DEFAULT_SUMMARY_SUFFIX = "_summary"
 DEFAULT_SUMMARY_MAX_CHARS = 16000
 DEFAULT_SUMMARY_MAX_TOKENS = 600
+SUMMARY_MAX_WORDS = 120
+SUMMARY_MAX_POINTS = 3
 DISCLAIMER_TEXT = (
     "Please note: This transcription and summary were created with the assistance of "
     "artificial intelligence technology. While we've used automated tools to help make "
@@ -267,13 +270,15 @@ def build_prompt(chunk: str) -> str:
     )
 
 
-def build_summary_prompt(text: str) -> str:
+def summary_format_instructions() -> str:
     return (
-        "Create a concise sermon summary (around 100 words) from the cleaned transcript below.\n"
-        "Format your response exactly like this:\n"
+        f"Write one summary paragraph of around 100 words, with a maximum of {SUMMARY_MAX_WORDS} words.\n"
+        f"List one to {SUMMARY_MAX_POINTS} main points, one bullet per line. "
+        "The word limit applies only to the summary paragraph.\n"
+        "Use plain text with these exact headings and hyphen bullets:\n"
         "Summary:\n"
         "<single paragraph>\n\n"
-        "Main points (no more than 3):\n"
+        "Main points:\n"
         "- point 1\n"
         "- point 2\n\n"
         "Bible references:\n"
@@ -281,6 +286,13 @@ def build_summary_prompt(text: str) -> str:
         "- reference 2\n\n"
         "Only include references explicitly mentioned. If none are mentioned, write "
         "'None noted.' Return only the formatted summary.\n\n"
+    )
+
+
+def build_summary_prompt(text: str) -> str:
+    return (
+        "Create a sermon summary from the cleaned transcript below.\n"
+        f"{summary_format_instructions()}"
         f"Cleaned transcript:\n{text.strip()}"
     )
 
@@ -301,19 +313,47 @@ def build_summary_chunk_prompt(text: str) -> str:
 def build_summary_merge_prompt(text: str) -> str:
     return (
         "Combine the notes below into a single sermon summary.\n"
-        "Format your response exactly like this:\n"
-        "Summary:\n"
-        "<single paragraph>\n\n"
-        "Main points:\n"
-        "- point 1\n"
-        "- point 2\n\n"
-        "Bible references:\n"
-        "- reference 1\n"
-        "- reference 2\n\n"
-        "Only include references explicitly mentioned. If none are mentioned, write "
-        "'None noted.' Return only the formatted summary.\n\n"
+        f"{summary_format_instructions()}"
         f"Notes:\n{text.strip()}"
     )
+
+
+def summary_matches_format(summary: str) -> bool:
+    sections = re.fullmatch(
+        r"Summary:[ \t]*\n(.+?)\n\s*Main points:[ \t]*\n(.+?)\n\s*Bible references:[ \t]*\n(.+)",
+        summary.replace("\r\n", "\n").strip(),
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    if not sections:
+        return False
+
+    paragraph, points, references = sections.groups()
+    point_lines = [line.strip() for line in points.splitlines() if line.strip()]
+    return (
+        0 < len(paragraph.split()) <= SUMMARY_MAX_WORDS
+        and not re.search(r"\n\s*\n", paragraph.strip())
+        and 1 <= len(point_lines) <= SUMMARY_MAX_POINTS
+        and all(re.match(r"-\s+\S", line) for line in point_lines)
+        and bool(references.strip())
+    )
+
+
+def generate_final_summary(prompt: str, generate: Callable[[str], str]) -> str:
+    summary = generate(prompt)
+    if summary_matches_format(summary):
+        return summary
+
+    summary = generate(
+        "The previous response did not meet the required length or format. "
+        "Check the word count and bullet count and use the exact headings shown below.\n\n"
+        + prompt
+    )
+    if not summary_matches_format(summary):
+        raise RuntimeError(
+            f"The AI summary must contain one paragraph of at most {SUMMARY_MAX_WORDS} words, "
+            f"one to {SUMMARY_MAX_POINTS} main points, and a Bible references section."
+        )
+    return summary
 
 
 def call_claude(
@@ -586,42 +626,26 @@ def summarize_transcript(
     timeout: int,
     max_chars: int,
 ) -> str:
-    if len(cleaned_text) <= max_chars:
-        prompt = build_summary_prompt(cleaned_text)
-        return call_claude(
-            prompt=prompt,
-            api_key=api_key,
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            timeout=timeout,
-        )
-
-    chunks = split_into_chunks(cleaned_text, max_chars)
-    chunk_notes = []
-    for chunk_idx, chunk in enumerate(chunks, start=1):
-        print(f"  Summary chunk {chunk_idx}/{len(chunks)}", flush=True)
-        prompt = build_summary_chunk_prompt(chunk)
-        notes = call_claude(
-            prompt=prompt,
-            api_key=api_key,
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            timeout=timeout,
-        )
-        chunk_notes.append(notes.strip())
-
-    combined_notes = "\n\n".join(note for note in chunk_notes if note)
-    merge_prompt = build_summary_merge_prompt(combined_notes)
-    return call_claude(
-        prompt=merge_prompt,
+    generate = partial(
+        call_claude,
         api_key=api_key,
         model=model,
         max_tokens=max_tokens,
         temperature=temperature,
         timeout=timeout,
     )
+    if len(cleaned_text) <= max_chars:
+        return generate_final_summary(build_summary_prompt(cleaned_text), generate)
+
+    chunks = split_into_chunks(cleaned_text, max_chars)
+    chunk_notes = []
+    for chunk_idx, chunk in enumerate(chunks, start=1):
+        print(f"  Summary chunk {chunk_idx}/{len(chunks)}", flush=True)
+        notes = generate(build_summary_chunk_prompt(chunk))
+        chunk_notes.append(notes.strip())
+
+    combined_notes = "\n\n".join(note for note in chunk_notes if note)
+    return generate_final_summary(build_summary_merge_prompt(combined_notes), generate)
 
 
 def main() -> None:

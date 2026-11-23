@@ -7,6 +7,7 @@ import threading
 import time
 from dataclasses import replace
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -25,11 +26,13 @@ from sermon_transcribe.cleanup import (
     build_summary_prompt,
     call_claude,
     call_llm,
+    generate_final_summary,
     split_into_chunks,
     strip_disclaimer,
     DEFAULT_MODEL,
     DEFAULT_OPENROUTER_MODEL,
     DEFAULT_OPENAI_MODEL,
+    DEFAULT_SUMMARY_MAX_CHARS,
     SUMMARY_DISCLAIMER_TEXT,
 )
 from sermon_transcribe.io_utils import ensure_dir
@@ -511,14 +514,11 @@ def cleanup_transcript(
     # Generate summary
     emit_progress(job_id, "processing", 80, "Generating summary...")
 
-    # Check for cancellation before summary
-    if is_job_cancelled(job_id):
-        return
-
-    if len(cleaned_text) <= 16000:
-        summary_prompt = build_summary_prompt(cleaned_text)
-        summary = call_llm(
-            prompt=summary_prompt,
+    def generate(prompt: str) -> str:
+        if is_job_cancelled(job_id):
+            raise RuntimeError("Job cancelled by user")
+        return call_llm(
+            prompt=prompt,
             api_key=api_key,
             model=model_name,
             max_tokens=1200,
@@ -526,8 +526,11 @@ def cleanup_transcript(
             timeout=120,
             provider=provider,
         )
+
+    if len(cleaned_text) <= DEFAULT_SUMMARY_MAX_CHARS:
+        summary_prompt = build_summary_prompt(cleaned_text)
     else:
-        summary_chunks = split_into_chunks(cleaned_text, 16000)
+        summary_chunks = split_into_chunks(cleaned_text, DEFAULT_SUMMARY_MAX_CHARS)
         chunk_notes = []
         for idx, chunk in enumerate(summary_chunks, start=1):
             # Check for cancellation before processing each summary chunk
@@ -535,28 +538,13 @@ def cleanup_transcript(
                 return
 
             emit_progress(job_id, "processing", 80 + (idx * 5 // len(summary_chunks)), f"Summary chunk {idx}/{len(summary_chunks)}")
-            notes = call_llm(
-                prompt=build_summary_chunk_prompt(chunk),
-                api_key=api_key,
-                model=model_name,
-                max_tokens=1200,
-                temperature=0.1,
-                timeout=120,
-                provider=provider,
-            )
+            notes = generate(build_summary_chunk_prompt(chunk))
             chunk_notes.append(notes.strip())
 
         combined_notes = "\n\n".join(note for note in chunk_notes if note)
-        summary = call_llm(
-            prompt=build_summary_merge_prompt(combined_notes),
-            api_key=api_key,
-            model=model_name,
-            max_tokens=1200,
-            temperature=0.1,
-            timeout=120,
-            provider=provider,
-        )
+        summary_prompt = build_summary_merge_prompt(combined_notes)
 
+    summary = generate_final_summary(summary_prompt, generate)
     if is_job_cancelled(job_id):
         return
 
@@ -1628,41 +1616,28 @@ def upload_transcript():
                 # Generate summary
                 emit_progress(job_id, "processing", 80, "Generating summary...")
 
-                if len(cleaned_text) <= 16000:
+                generate = partial(
+                    call_claude,
+                    api_key=api_key,
+                    model=model_name,
+                    max_tokens=1200,
+                    temperature=0.1,
+                    timeout=120,
+                )
+                if len(cleaned_text) <= DEFAULT_SUMMARY_MAX_CHARS:
                     summary_prompt = build_summary_prompt(cleaned_text)
-                    summary = call_claude(
-                        prompt=summary_prompt,
-                        api_key=api_key,
-                        model=model_name,
-                        max_tokens=1200,
-                        temperature=0.1,
-                        timeout=120,
-                    )
                 else:
-                    summary_chunks = split_into_chunks(cleaned_text, 16000)
+                    summary_chunks = split_into_chunks(cleaned_text, DEFAULT_SUMMARY_MAX_CHARS)
                     chunk_notes = []
                     for idx, chunk in enumerate(summary_chunks, start=1):
                         emit_progress(job_id, "processing", 80 + (idx * 5 // len(summary_chunks)), f"Summary chunk {idx}/{len(summary_chunks)}")
-                        notes = call_claude(
-                            prompt=build_summary_chunk_prompt(chunk),
-                            api_key=api_key,
-                            model=model_name,
-                            max_tokens=1200,
-                            temperature=0.1,
-                            timeout=120,
-                        )
+                        notes = generate(build_summary_chunk_prompt(chunk))
                         chunk_notes.append(notes.strip())
 
                     combined_notes = "\n\n".join(note for note in chunk_notes if note)
-                    summary = call_claude(
-                        prompt=build_summary_merge_prompt(combined_notes),
-                        api_key=api_key,
-                        model=model_name,
-                        max_tokens=1200,
-                        temperature=0.1,
-                        timeout=120,
-                    )
+                    summary_prompt = build_summary_merge_prompt(combined_notes)
 
+                summary = generate_final_summary(summary_prompt, generate)
                 summary_path = output_dir / f"{transcript_filename}_summary.txt"
                 summary_path.write_text(apply_disclaimer(summary, SUMMARY_DISCLAIMER_TEXT), encoding="utf-8")
 
