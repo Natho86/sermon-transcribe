@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import threading
 import time
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
@@ -25,6 +26,7 @@ from sermon_transcribe.cleanup import (
     call_claude,
     call_llm,
     split_into_chunks,
+    strip_disclaimer,
     DEFAULT_MODEL,
     DEFAULT_OPENROUTER_MODEL,
     DEFAULT_OPENAI_MODEL,
@@ -38,10 +40,8 @@ from sermon_transcribe.settings import (
     verify_key,
 )
 from sermon_transcribe.transcription import (
-    TranscriptionResult,
     build_config,
     build_model,
-    output_paths,
     transcribe_file,
 )
 
@@ -346,7 +346,7 @@ def is_job_cancelled(job_id: str) -> bool:
         return job_id in cancelled_jobs
 
 
-def process_transcription(job_id: str, audio_path: Path, output_dir: Path, do_cleanup: bool, convert_m4a: bool = False, convert_flac: bool = False, language: Optional[str] = None):
+def process_transcription(job_id: str, audio_path: Path, output_dir: Path, do_cleanup: bool, convert_m4a: bool = False, convert_flac: bool = False, language: Optional[str] = None, *, provider_info: Optional[dict] = None):
     """Background task for transcribing audio."""
     # Small delay to ensure client receives upload response before WebSocket updates
     time.sleep(0.2)
@@ -366,19 +366,8 @@ def process_transcription(job_id: str, audio_path: Path, output_dir: Path, do_cl
 
             # Create a config with the specified language (or use default)
             transcription_config = config
-            if language is not None and language != config.language:
-                from sermon_transcribe.transcription import build_config
-                transcription_config = build_config(
-                    model=config.model,
-                    device=config.device,
-                    compute_type=config.compute_type,
-                    beam_size=config.beam_size,
-                    language=language,
-                    task=config.task,
-                    vad_filter=config.vad_filter,
-                    cache_dir=config.cache_dir,
-                    hf_token=config.hf_token,
-                )
+            if language is not None:
+                transcription_config = replace(config, language=None if language == "auto" else language)
 
             result = transcribe_file(
                 model=model,
@@ -419,8 +408,8 @@ def process_transcription(job_id: str, audio_path: Path, output_dir: Path, do_cl
                 if is_job_cancelled(job_id):
                     emit_progress(job_id, "cancelled", 0, "Job cancelled by user")
                     return
-                emit_progress(job_id, "processing", 60, "Cleaning transcript with Claude...")
-                cleanup_transcript(job_id, result, output_dir)
+                cleaned_path = output_dir / f"{result.audio_path.stem}.txt"
+                cleanup_transcript(job_id, result.text_path, cleaned_path, provider_info=provider_info)
 
             # Check for cancellation before completing
             if is_job_cancelled(job_id):
@@ -449,9 +438,11 @@ def process_transcription(job_id: str, audio_path: Path, output_dir: Path, do_cl
                 emit_progress(job_id, "failed", 0, f"Error: {str(exc)}")
 
 
-def cleanup_transcript(job_id: str, result: TranscriptionResult, output_dir: Path):
+def cleanup_transcript(
+    job_id: str, text_path: Path, cleaned_path: Path, *, provider_info: Optional[dict] = None
+):
     """Clean up transcript with an LLM and generate summary."""
-    provider_info = get_active_provider()
+    provider_info = provider_info or get_active_provider()
     if not provider_info:
         emit_progress(job_id, "processing", 60, "Skipping cleanup (no API key)")
         return
@@ -465,7 +456,7 @@ def cleanup_transcript(job_id: str, result: TranscriptionResult, output_dir: Pat
         model_name = provider_info["model"] or DEFAULT_OPENAI_MODEL
     else:
         model_name = provider_info["model"] or os.environ.get("CLAUDE_MODEL", DEFAULT_MODEL)
-    raw_text = result.text_path.read_text(encoding="utf-8").strip()
+    raw_text = strip_disclaimer(text_path.read_text(encoding="utf-8"))
 
     if not raw_text:
         emit_progress(job_id, "processing", 90, "Skipping cleanup (empty transcript)")
@@ -517,10 +508,6 @@ def cleanup_transcript(job_id: str, result: TranscriptionResult, output_dir: Pat
     non_empty_chunks = sum(1 for c in cleaned_chunks if c)
     if non_empty_chunks < len(chunks):
         print(f"WARNING: Lost {len(chunks) - non_empty_chunks} chunks during cleaning", flush=True)
-    base_name = result.audio_path.stem
-    cleaned_path = output_dir / f"{base_name}.txt"
-    cleaned_path.write_text(apply_disclaimer(cleaned_text), encoding="utf-8")
-
     # Generate summary
     emit_progress(job_id, "processing", 80, "Generating summary...")
 
@@ -570,15 +557,20 @@ def cleanup_transcript(job_id: str, result: TranscriptionResult, output_dir: Pat
             provider=provider,
         )
 
-    summary_path = output_dir / f"{base_name}_summary.txt"
+    if is_job_cancelled(job_id):
+        return
+
+    summary_path = cleaned_path.with_name(f"{cleaned_path.stem}_summary.txt")
     summary_path.write_text(apply_disclaimer(summary, SUMMARY_DISCLAIMER_TEXT), encoding="utf-8")
+    cleaned_path.write_text(apply_disclaimer(cleaned_text), encoding="utf-8")
 
     with jobs_lock:
         jobs[job_id]["text_path"] = str(cleaned_path.absolute())
         jobs[job_id]["summary_path"] = str(summary_path.absolute())
-        jobs[job_id]["summary_url"] = f"/download/{job_id}/summary"
 
-    emit_progress(job_id, "processing", 90, "Cleanup complete")
+    emit_progress(job_id, "processing", 90, "Cleanup complete", {
+        "summary_url": f"/download/{job_id}/summary",
+    })
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -920,107 +912,7 @@ def reload_transcript(job_id: str):
 @login_required
 def regenerate_cleaned_transcript(job_id: str):
     """Regenerate cleaned transcript and summary from current transcript content."""
-    with jobs_lock:
-        job = jobs.get(job_id)
-
-    if not job or "text_path" not in job:
-        return jsonify({"error": "Transcript not found"}), 404
-
-    text_path = Path(job["text_path"])
-    if not text_path.exists():
-        return jsonify({"error": "Transcript file not found"}), 404
-
-    # Check if API key is available
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        return jsonify({"error": "ANTHROPIC_API_KEY not configured"}), 400
-
-    # Read current transcript content
-    current_text = text_path.read_text(encoding="utf-8").strip()
-    if not current_text:
-        return jsonify({"error": "Transcript is empty"}), 400
-
-    # Run cleanup in background thread to avoid blocking
-    def run_regeneration():
-        try:
-            model_name = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
-
-            # Clean transcript
-            chunks = split_into_chunks(current_text, 8000)
-            cleaned_chunks = []
-
-            for idx, chunk in enumerate(chunks, start=1):
-                prompt = build_prompt(chunk)
-                cleaned = call_claude(
-                    prompt=prompt,
-                    api_key=api_key,
-                    model=model_name,
-                    max_tokens=1200,
-                    temperature=0.1,
-                    timeout=120,
-                )
-                cleaned_chunks.append(cleaned.strip())
-
-            cleaned_text = "\n\n".join(chunk for chunk in cleaned_chunks if chunk)
-
-            # Save cleaned transcript (overwrite current file)
-            text_path.write_text(apply_disclaimer(cleaned_text), encoding="utf-8")
-
-            # Generate summary
-            output_dir = text_path.parent
-            base_name = text_path.stem
-
-            if len(cleaned_text) <= 16000:
-                summary_prompt = build_summary_prompt(cleaned_text)
-                summary = call_claude(
-                    prompt=summary_prompt,
-                    api_key=api_key,
-                    model=model_name,
-                    max_tokens=1200,
-                    temperature=0.1,
-                    timeout=120,
-                )
-            else:
-                summary_chunks = split_into_chunks(cleaned_text, 16000)
-                chunk_notes = []
-                for chunk in summary_chunks:
-                    notes = call_claude(
-                        prompt=build_summary_chunk_prompt(chunk),
-                        api_key=api_key,
-                        model=model_name,
-                        max_tokens=1200,
-                        temperature=0.1,
-                        timeout=120,
-                    )
-                    chunk_notes.append(notes.strip())
-
-                combined_notes = "\n\n".join(note for note in chunk_notes if note)
-                summary = call_claude(
-                    prompt=build_summary_merge_prompt(combined_notes),
-                    api_key=api_key,
-                    model=model_name,
-                    max_tokens=1200,
-                    temperature=0.1,
-                    timeout=120,
-                )
-
-            summary_path = output_dir / f"{base_name}_summary.txt"
-            summary_path.write_text(apply_disclaimer(summary, SUMMARY_DISCLAIMER_TEXT), encoding="utf-8")
-
-            with jobs_lock:
-                jobs[job_id]["summary_path"] = str(summary_path.absolute())
-                jobs[job_id]["summary_url"] = f"/download/{job_id}/summary"
-
-        except Exception as exc:
-            print(f"Error regenerating transcript for {job_id}: {exc}", flush=True)
-
-    thread = threading.Thread(target=run_regeneration, daemon=True)
-    thread.start()
-
-    return jsonify({
-        "success": True,
-        "message": "Regeneration started. This may take a few minutes."
-    })
+    return start_reprocessing(job_id, {"cleanup": True})
 
 
 @app.route("/api/audio/<job_id>")
@@ -1115,11 +1007,9 @@ def trim_audio(job_id: str):
         shutil.move(str(temp_output), str(audio_path))
 
         # Update segments timestamps by subtracting start_time
-        output_dir = app.config["OUTPUT_FOLDER"] / job_id
-        if output_dir.exists():
-            json_files = list(output_dir.glob("*_timestamps.json"))
-            if json_files:
-                json_path = json_files[0]
+        if job.get("json_path"):
+            json_path = Path(job["json_path"])
+            if json_path.is_file():
                 try:
                     with open(json_path, 'r') as f:
                         segments_data = json.load(f)
@@ -1177,19 +1067,10 @@ def get_segments(job_id: str):
     if not job:
         return jsonify({"error": "Job not found"}), 404
 
-    # Find JSON file in output directory
-    output_dir = app.config["OUTPUT_FOLDER"] / job_id
-    if not output_dir.exists():
-        return jsonify({"error": "Output not found"}), 404
-
-    # Find raw JSON file with segments (try both new and old naming)
-    json_files = list(output_dir.glob("*_timestamps.json"))
-    if not json_files:
-        json_files = list(output_dir.glob("*_raw.json"))  # Fallback to old naming
-    if not json_files:
+    if not job.get("json_path") or not Path(job["json_path"]).is_file():
         return jsonify({"error": "Segments not found"}), 404
 
-    json_path = json_files[0]
+    json_path = Path(job["json_path"])
 
     try:
         with open(json_path, 'r') as f:
@@ -1538,68 +1419,122 @@ def upload():
     return jsonify({"job_id": job_id, "status": "queued"})
 
 
+def find_original_audio(job_id: str) -> Optional[Path]:
+    upload_dir = app.config["UPLOAD_FOLDER"] / job_id
+    for path in sorted(upload_dir.glob("*")):
+        if path.is_file() and not (
+            path.name.endswith((".backup", ".trimmed.wav"))
+            or (path.suffix.startswith(".part") and path.suffix[5:].isdigit())
+        ):
+            return path
+    return None
+
+
+def process_existing_transcript(job_id: str, text_path: Path, provider_info: dict):
+    """Clean and summarise the saved transcript using the job's normal progress updates."""
+    try:
+        if not is_job_cancelled(job_id):
+            base_name = text_path.stem.removesuffix("_timestamps").removesuffix("_raw")
+            cleaned_path = text_path.with_name(f"{base_name}.txt")
+            cleanup_transcript(job_id, text_path, cleaned_path, provider_info=provider_info)
+
+        if is_job_cancelled(job_id):
+            emit_progress(job_id, "cancelled", 0, "Job cancelled by user")
+        else:
+            emit_progress(job_id, "completed", 100, "Processing complete", {
+                "text_url": f"/download/{job_id}/text",
+            })
+    except Exception as exc:
+        if is_job_cancelled(job_id):
+            emit_progress(job_id, "cancelled", 0, "Job cancelled by user")
+        else:
+            emit_progress(job_id, "failed", 0, f"Error: {exc}")
+
+
+def start_reprocessing(job_id: str, data: dict, *, legacy_retranscribe: bool = False):
+    if not isinstance(data, dict):
+        return jsonify({"error": "Invalid reprocessing options"}), 400
+
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if not job:
+            return jsonify({"error": "Job not found"}), 404
+        if job["status"] in ("queued", "processing", "cancelling"):
+            return jsonify({"error": "This job is already running"}), 409
+
+        do_retranscribe = legacy_retranscribe or data.get("retranscribe", False)
+        do_cleanup = data.get("cleanup", job.get("cleanup", False) if legacy_retranscribe else False)
+        if not isinstance(do_retranscribe, bool) or not isinstance(do_cleanup, bool):
+            return jsonify({"error": "Invalid reprocessing options"}), 400
+        if not (do_retranscribe or do_cleanup):
+            return jsonify({"error": "Select at least one step to reprocess"}), 400
+
+        options = {"cleanup": do_cleanup}
+        if do_retranscribe:
+            audio_path = find_original_audio(job_id)
+            if audio_path is None:
+                return jsonify({"error": "Original audio file not found"}), 404
+
+            language = data.get("language", job.get("language"))
+            if language is not None and not isinstance(language, str):
+                return jsonify({"error": "Invalid transcription language"}), 400
+            if language in ("", "none") or (legacy_retranscribe and language == "auto"):
+                language = None
+            options["language"] = language or config.language
+        else:
+            if not job.get("text_path") or not Path(job["text_path"]).is_file():
+                return jsonify({"error": "Transcript file not found"}), 404
+            text_path = Path(job["text_path"])
+            if not strip_disclaimer(text_path.read_text(encoding="utf-8")):
+                return jsonify({"error": "Transcript is empty"}), 400
+
+        provider_info = get_active_provider() if do_cleanup else None
+        if do_cleanup and not provider_info and not legacy_retranscribe:
+            return jsonify({"error": "Configure an AI API key in Settings to clean and summarise"}), 400
+
+        if do_retranscribe:
+            output_dir = app.config["OUTPUT_FOLDER"] / job_id
+            thread = threading.Thread(
+                target=process_transcription,
+                args=(job_id, audio_path, output_dir, do_cleanup, False, False, language),
+                kwargs={"provider_info": provider_info},
+                daemon=True,
+            )
+        else:
+            thread = threading.Thread(
+                target=process_existing_transcript, args=(job_id, text_path, provider_info), daemon=True
+            )
+
+        with cancelled_lock:
+            cancelled_jobs.discard(job_id)
+        queued = {
+            "job_id": job_id,
+            "status": "queued",
+            "progress": 0,
+            "message": "Reprocessing queued",
+            **options,
+        }
+        job.update(queued, updated_at=datetime.utcnow().isoformat())
+
+    try:
+        thread.start()
+    except RuntimeError:
+        emit_progress(job_id, "failed", 0, "Could not start reprocessing")
+        return jsonify({"error": "Could not start reprocessing"}), 503
+
+    return jsonify({"success": True, **queued})
+
+
+@app.route("/api/reprocess/<job_id>", methods=["POST"])
+@login_required
+def reprocess(job_id: str):
+    return start_reprocessing(job_id, request.get_json())
+
+
 @app.route("/api/retranscribe/<job_id>", methods=["POST"])
 @login_required
 def retranscribe(job_id: str):
-    """Re-transcribe an existing job with optional new language setting."""
-    with jobs_lock:
-        if job_id not in jobs:
-            return jsonify({"error": "Job not found"}), 404
-
-        old_job = jobs[job_id].copy()
-
-    # Get options from request
-    data = request.get_json() or {}
-    do_cleanup = data.get("cleanup", old_job.get("cleanup", False))
-    language = data.get("language", old_job.get("language"))
-
-    # Convert empty string or "auto" to None
-    if language in ("", "auto", "none"):
-        language = None
-
-    # Find the original audio file
-    upload_path = app.config["UPLOAD_FOLDER"] / job_id
-    if not upload_path.exists():
-        return jsonify({"error": "Original audio file not found"}), 404
-
-    # Find audio file in upload directory
-    audio_files = list(upload_path.glob("*"))
-    if not audio_files:
-        return jsonify({"error": "Original audio file not found"}), 404
-
-    audio_path = audio_files[0]  # Use first file found
-
-    # Use existing output directory (preserves M4A/FLAC conversions)
-    output_dir = app.config["OUTPUT_FOLDER"] / job_id
-
-    # Preserve audio conversion URLs from old job
-    preserved_fields = {}
-    for key in ['m4a_url', 'flac_url', 'm4a_path', 'flac_path']:
-        if key in old_job:
-            preserved_fields[key] = old_job[key]
-
-    # Update existing job instead of creating new one
-    with jobs_lock:
-        jobs[job_id].update({
-            "status": "queued",
-            "progress": 0,
-            "message": "Re-transcription queued",
-            "updated_at": datetime.utcnow().isoformat(),
-            "cleanup": do_cleanup,
-            "language": language or config.language,
-        })
-        # Preserve audio conversions
-        jobs[job_id].update(preserved_fields)
-
-    # Start background processing (don't convert audio again - set to False)
-    thread = threading.Thread(
-        target=process_transcription,
-        args=(job_id, audio_path, output_dir, do_cleanup, False, False, language),
-        daemon=True,
-    )
-    thread.start()
-
-    return jsonify({"job_id": job_id, "status": "queued", "message": "Re-transcription started"})
+    return start_reprocessing(job_id, request.get_json() or {}, legacy_retranscribe=True)
 
 
 @app.route("/upload-transcript", methods=["POST"])
@@ -1756,10 +1691,12 @@ def status(job_id: str):
     """Get job status."""
     with jobs_lock:
         job = jobs.get(job_id)
+        if job is None:
+            return jsonify({"error": "Job not found"}), 404
+        job = job.copy()
 
-    if not job:
-        return jsonify({"error": "Job not found"}), 404
-
+    job["has_audio"] = find_original_audio(job_id) is not None
+    job["has_transcript"] = bool(job.get("text_path") and Path(job["text_path"]).is_file())
     return jsonify(job)
 
 
@@ -1952,7 +1889,7 @@ def load_existing_jobs():
         # Try to get the base filename
         base_filename = None
         text_path = None
-        json_path = None
+        raw_text_path = None
         summary_path = None
 
         # Look for audio files
@@ -1970,35 +1907,18 @@ def load_existing_jobs():
         for txt_file in txt_files:
             if txt_file.stem.endswith("_summary"):
                 summary_path = txt_file
-            elif txt_file.stem.endswith("_timestamps"):
-                # Check if cleaned version exists
-                cleaned_name = txt_file.stem[:-11] + ".txt"  # Remove _timestamps
-                cleaned_path = txt_file.parent / cleaned_name
-            elif txt_file.stem.endswith("_raw"):
-                # Legacy naming - check if cleaned version exists
-                cleaned_name = txt_file.stem[:-4] + ".txt"  # Remove _raw
-                cleaned_path = txt_file.parent / cleaned_name
-                if cleaned_path.exists():
-                    text_path = cleaned_path
-                    base_filename = txt_file.stem[:-4]
-                else:
-                    text_path = txt_file
-                    base_filename = txt_file.stem[:-4]
-            elif not txt_file.stem.endswith("_summary"):
+            elif txt_file.stem.endswith(("_timestamps", "_raw")):
+                raw_text_path = txt_file
+            else:
                 text_path = txt_file
-                if base_filename is None:
-                    base_filename = txt_file.stem
+                base_filename = txt_file.stem
 
-        for json_file in json_files:
-            if json_file.stem.endswith("_timestamps"):
-                json_path = json_file
-                if base_filename is None:
-                    base_filename = json_file.stem[:-11]
-            elif json_file.stem.endswith("_raw"):
-                # Legacy naming
-                json_path = json_file
-                if base_filename is None:
-                    base_filename = json_file.stem[:-4]
+        json_path = max(json_files, key=lambda path: path.stat().st_mtime_ns, default=None)
+        text_path = text_path or raw_text_path
+        if not base_filename:
+            source = text_path or json_path
+            if source:
+                base_filename = source.stem.removesuffix("_timestamps").removesuffix("_raw")
 
         if base_filename and (text_path or json_path):
             # Get file modification time

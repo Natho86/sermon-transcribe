@@ -49,6 +49,8 @@ A powerful audio transcription application designed for processing sermon record
    http://localhost:5000
    ```
 
+Use **Reprocess** in the job actions menu to retranscribe the audio, clean and summarise the saved transcript with AI, or run both steps in order. AI cleanup uses the active API key in **Settings**.
+
 ## Configuration
 
 ### Environment Variables (.env)

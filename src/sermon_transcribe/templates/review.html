@@ -630,12 +630,19 @@
                             const statusResponse = await fetch(`/status/${jobId}`);
                             const statusData = await statusResponse.json();
 
-                            if (statusData.message && statusData.message.includes('complete')) {
+                            if (statusData.status === 'completed') {
                                 clearInterval(pollInterval);
+                                clearTimeout(pollTimeout);
                                 showNotification('Regeneration complete! Reloading page...');
                                 setTimeout(() => {
                                     location.reload();
                                 }, 2000);
+                            } else if (['failed', 'cancelled'].includes(statusData.status)) {
+                                clearInterval(pollInterval);
+                                clearTimeout(pollTimeout);
+                                regenerateBtn.disabled = false;
+                                regenerateBtn.textContent = 'Regenerate clean version';
+                                showNotification(statusData.message, 'error');
                             }
                         } catch (error) {
                             console.error('Error polling status:', error);
@@ -643,7 +650,7 @@
                     }, 5000);
 
                     // Timeout after 10 minutes
-                    setTimeout(() => {
+                    const pollTimeout = setTimeout(() => {
                         clearInterval(pollInterval);
                         regenerateBtn.disabled = false;
                         regenerateBtn.textContent = 'Regenerate clean version';

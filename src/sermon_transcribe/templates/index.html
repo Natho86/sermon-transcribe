@@ -218,12 +218,12 @@
     .st-actions-dropdown-content button:hover { background: var(--surface2); }
     .st-actions-dropdown-content button.st-danger { color: var(--statusBad); }
 
-    .st-cancel-btn, .st-retranscribe-btn, .st-delete-btn {
+    .st-cancel-btn, .st-reprocess-btn, .st-delete-btn {
         padding: 6px 12px; border-radius: 7px; font-size: 12px; font-weight: 600; cursor: pointer;
         border: 1px solid var(--border); background: var(--surface); color: var(--text2);
         transition: background-color 160ms ease;
     }
-    .st-cancel-btn:hover, .st-retranscribe-btn:hover { background: var(--surface2); }
+    .st-cancel-btn:hover, .st-reprocess-btn:hover { background: var(--surface2); }
     .st-delete-btn { color: var(--statusBad); }
     .st-delete-btn:hover { background: var(--statusBadBg); }
 
@@ -268,6 +268,11 @@
         font-size: 13px; line-height: 1.6; color: var(--text2); margin: 0;
     }
     .st-modal-footer { padding: 16px 20px; border-top: 1px solid var(--border); display: flex; gap: 8px; justify-content: flex-end; }
+    .st-reprocess-dialog {
+        width: min(440px, calc(100% - 40px)); padding: 0; border: 0; border-radius: 14px;
+        background: var(--surface); color: var(--text); box-shadow: var(--shadowMd);
+    }
+    .st-reprocess-dialog::backdrop { background: rgba(15,23,42,.5); }
 
     .st-loading-spinner {
         display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border);
@@ -470,6 +475,32 @@
         </div>
     </div>
 </div>
+<dialog class="st-reprocess-dialog" id="reprocessDialog" aria-labelledby="reprocessTitle">
+    <form id="reprocessForm">
+        <div class="st-modal-header">
+            <h2 class="st-modal-title" id="reprocessTitle">Reprocess</h2>
+        </div>
+        <div class="st-modal-body st-option-block">
+            <label class="st-option-row st-option-title">
+                <input type="checkbox" id="reprocessAudio" aria-describedby="reprocessAudioHint">
+                <span>Retranscribe audio <span class="st-option-hint" id="reprocessAudioHint" hidden>Original audio unavailable</span></span>
+            </label>
+            <div id="reprocessLanguageField" hidden>
+                <label class="st-option-title" for="reprocessLanguage">Transcription language</label>
+                <select class="st-select" id="reprocessLanguage"></select>
+            </div>
+            <label class="st-option-row st-option-title">
+                <input type="checkbox" id="reprocessCleanup">
+                Clean and summarise with AI
+            </label>
+            <div id="reprocessError" role="alert" hidden></div>
+        </div>
+        <div class="st-modal-footer">
+            <button type="button" class="st-btn st-btn-secondary" id="reprocessCancel">Cancel</button>
+            <button type="submit" class="st-btn st-btn-primary" id="reprocessSubmit">Reprocess</button>
+        </div>
+    </form>
+</dialog>
 {% endblock %}
 {% block scripts %}
 <script>
@@ -960,8 +991,8 @@
                     jobs[data.job_id] = {
                         job_id: data.job_id,
                         filename: file.name,
-                        status: 'queued',
-                        progress: 0,
+                        status: data.status || 'queued',
+                        progress: data.status === 'completed' ? 100 : 0,
                         message: 'Uploaded successfully'
                     };
                     renderJobs();
@@ -1174,7 +1205,7 @@
                         ${job.m4a_url ? `<a href="${job.m4a_url}" download>Download M4A</a>` : ''}
                         ${job.flac_url ? `<a href="${job.flac_url}" download>Download FLAC</a>` : ''}
                         <a href="#" class="download-all-btn" data-job-id="${job.job_id}">Download all files</a>
-                        <button class="retranscribe-btn" data-job-id="${job.job_id}">Retranscribe</button>
+                        <button class="reprocess-btn" data-job-id="${job.job_id}">Reprocess</button>
                         <div class="st-group-label">Danger zone</div>
                         <button class="delete-btn st-danger" data-job-id="${job.job_id}">Delete job</button>
                     </div>
@@ -1184,7 +1215,7 @@
             return `<button class="st-cancel-btn cancel-btn" data-job-id="${job.job_id}">Cancel</button>`;
         } else if (job.status === 'failed' || job.status === 'cancelled') {
             return `
-                <button class="st-retranscribe-btn retranscribe-btn" data-job-id="${job.job_id}">Retranscribe</button>
+                <button class="st-reprocess-btn reprocess-btn" data-job-id="${job.job_id}">Reprocess</button>
                 <button class="st-delete-btn delete-btn" data-job-id="${job.job_id}">Delete</button>
             `;
         }
@@ -1361,10 +1392,9 @@
             cancelJob(jobId);
         }
 
-        if (e.target.classList.contains('retranscribe-btn') || e.target.closest('.retranscribe-btn')) {
-            const btn = e.target.classList.contains('retranscribe-btn') ? e.target : e.target.closest('.retranscribe-btn');
-            const jobId = btn.dataset.jobId;
-            retranscribeJob(jobId);
+        const reprocessBtn = e.target.closest('.reprocess-btn');
+        if (reprocessBtn) {
+            openReprocessDialog(reprocessBtn.dataset.jobId);
         }
 
         if (e.target.classList.contains('download-all-btn') || e.target.closest('.download-all-btn')) {
@@ -1434,109 +1464,95 @@
         }
     }
 
-    // Re-transcribe job function
-    async function retranscribeJob(jobId) {
-        const job = jobs[jobId];
-        if (!job) return;
+    const reprocessDialog = document.getElementById('reprocessDialog');
+    const reprocessForm = document.getElementById('reprocessForm');
+    const reprocessAudio = document.getElementById('reprocessAudio');
+    const reprocessAudioHint = document.getElementById('reprocessAudioHint');
+    const reprocessLanguageField = document.getElementById('reprocessLanguageField');
+    const reprocessLanguage = document.getElementById('reprocessLanguage');
+    const reprocessCleanup = document.getElementById('reprocessCleanup');
+    const reprocessError = document.getElementById('reprocessError');
+    const reprocessCancel = document.getElementById('reprocessCancel');
+    const reprocessSubmit = document.getElementById('reprocessSubmit');
+    reprocessLanguage.replaceChildren(...Array.from(languageSelect.options, option => option.cloneNode(true)));
 
-        // Create a modal/prompt for re-transcribe options
-        const currentLanguage = job.language || 'en';
-        const languageOptions = {
-            'en': 'English',
-            'auto': 'Auto-detect',
-            'zh': 'Chinese',
-            'de': 'German',
-            'es': 'Spanish',
-            'fr': 'French',
-            'ja': 'Japanese',
-            'pt': 'Portuguese',
-            'it': 'Italian',
-            'ru': 'Russian',
-            'ar': 'Arabic',
-            'hi': 'Hindi',
-            'ko': 'Korean',
-            'nl': 'Dutch',
-            'sv': 'Swedish',
-            'cy': 'Welsh'
-        };
+    let reprocessJob;
+    let reprocessPending = false;
 
-        let languageSelectHTML = '<select id="retranscribeLanguage" class="st-select" style="width: 100%; margin: 10px 0;">';
-        for (const [code, name] of Object.entries(languageOptions)) {
-            const selected = code === currentLanguage ? 'selected' : '';
-            languageSelectHTML += `<option value="${code}" ${selected}>${name}</option>`;
-        }
-        languageSelectHTML += '</select>';
-
-        const modalHTML = `
-            <div style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(15,23,42,.5); display: flex; align-items: center; justify-content: center; z-index: 10000; padding: 20px;">
-                <div style="background: var(--surface); padding: 24px; border-radius: 14px; max-width: 440px; width: 100%; box-shadow: var(--shadowMd);">
-                    <h3 style="margin: 0 0 4px; font-size: 16px;">Retranscribe "${job.filename}"</h3>
-                    <p style="color: var(--textMuted); margin: 0 0 16px; font-size: 13px;">Choose language and options for re-transcription:</p>
-                    <label class="st-label">Language</label>
-                    ${languageSelectHTML}
-                    <label style="display: flex; align-items: center; gap: 8px; margin: 14px 0; cursor: pointer; font-size: 13px; color: var(--text2);">
-                        <input type="checkbox" id="retranscribeCleanup" ${job.cleanup ? 'checked' : ''} style="width:16px;height:16px;accent-color:var(--accent);">
-                        Clean and summarize with AI
-                    </label>
-                    <div style="display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end;">
-                        <button id="retranscribeCancelBtn" class="st-btn st-btn-secondary">Cancel</button>
-                        <button id="retranscribeConfirmBtn" class="st-btn st-btn-primary">Start retranscription</button>
-                    </div>
-                </div>
-            </div>
-        `;
-
-        const modalEl = document.createElement('div');
-        modalEl.innerHTML = modalHTML;
-        document.body.appendChild(modalEl);
-
-        const cancelBtn = modalEl.querySelector('#retranscribeCancelBtn');
-        const confirmBtn = modalEl.querySelector('#retranscribeConfirmBtn');
-        const languageSelect = modalEl.querySelector('#retranscribeLanguage');
-        const cleanupCheckbox = modalEl.querySelector('#retranscribeCleanup');
-
-        cancelBtn.addEventListener('click', () => {
-            document.body.removeChild(modalEl);
-        });
-
-        confirmBtn.addEventListener('click', async () => {
-            const selectedLanguage = languageSelect.value;
-            const doCleanup = cleanupCheckbox.checked;
-
-            document.body.removeChild(modalEl);
-
-            try {
-                const response = await fetch(`/api/retranscribe/${jobId}`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        language: selectedLanguage === 'auto' ? null : selectedLanguage,
-                        cleanup: doCleanup
-                    })
-                });
-
-                const data = await response.json();
-
-                if (response.ok) {
-                    // Update existing job status (re-transcribe updates the same job)
-                    jobs[data.job_id] = {
-                        ...jobs[data.job_id],
-                        status: 'queued',
-                        progress: 0,
-                        message: data.message
-                    };
-                    renderJobs();
-                    showSimpleNotification('Re-transcription started - updating existing job', 'success');
-                } else {
-                    alert('Failed to start re-transcription: ' + data.error);
-                }
-            } catch (error) {
-                alert('Error starting re-transcription: ' + error.message);
-            }
-        });
+    function updateReprocessOptions() {
+        reprocessLanguageField.hidden = !reprocessAudio.checked;
+        reprocessCleanup.disabled = !reprocessAudio.checked && !reprocessJob.has_transcript;
+        reprocessSubmit.disabled = reprocessPending ||
+            !(reprocessAudio.checked || (reprocessCleanup.checked && !reprocessCleanup.disabled));
     }
+
+    async function openReprocessDialog(jobId) {
+        try {
+            const response = await fetch(`/status/${jobId}`);
+            const job = await response.json();
+            if (!response.ok) throw new Error(job.error);
+            if (reprocessDialog.open) return;
+
+            reprocessJob = job;
+            document.getElementById('reprocessTitle').textContent = `Reprocess ${job.filename}`;
+            reprocessAudio.checked = job.has_audio;
+            reprocessAudio.disabled = !job.has_audio;
+            reprocessAudioHint.hidden = job.has_audio;
+            reprocessCleanup.checked = job.cleanup || (!job.has_audio && job.has_transcript);
+            reprocessLanguage.value = job.language || 'en';
+            if (!reprocessLanguage.value) reprocessLanguage.value = 'en';
+            reprocessError.hidden = true;
+            updateReprocessOptions();
+            reprocessDialog.showModal();
+        } catch (error) {
+            alert('Could not open reprocessing options: ' + error.message);
+        }
+    }
+
+    reprocessForm.addEventListener('change', updateReprocessOptions);
+    reprocessCancel.addEventListener('click', () => reprocessDialog.close());
+    reprocessDialog.addEventListener('cancel', event => {
+        if (reprocessPending) event.preventDefault();
+    });
+
+    reprocessForm.addEventListener('submit', async event => {
+        event.preventDefault();
+        if (reprocessSubmit.disabled) return;
+
+        const jobId = reprocessJob.job_id;
+        const previousJob = jobs[jobId];
+        const options = {
+            retranscribe: reprocessAudio.checked,
+            cleanup: reprocessCleanup.checked && !reprocessCleanup.disabled,
+        };
+        if (options.retranscribe) options.language = reprocessLanguage.value;
+
+        reprocessPending = true;
+        reprocessCancel.disabled = true;
+        reprocessError.hidden = true;
+        updateReprocessOptions();
+
+        try {
+            const response = await fetch(`/api/reprocess/${jobId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(options),
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error);
+
+            if (jobs[jobId] === previousJob) updateJob(data);
+            reprocessDialog.close();
+            showSimpleNotification('Reprocessing started', 'success');
+        } catch (error) {
+            reprocessError.textContent = error.message;
+            reprocessError.hidden = false;
+        } finally {
+            reprocessPending = false;
+            reprocessCancel.disabled = false;
+            updateReprocessOptions();
+        }
+    });
 
     // Download all files function
     async function downloadAllFiles(jobId, btnElement) {
