@@ -264,11 +264,11 @@ def build_prompt(chunk: str) -> str:
 
 def build_summary_prompt(text: str) -> str:
     return (
-        "Create a concise sermon summary from the cleaned transcript below.\n"
+        "Create a concise sermon summary (around 100 words) from the cleaned transcript below.\n"
         "Format your response exactly like this:\n"
         "Summary:\n"
         "<single paragraph>\n\n"
-        "Main points:\n"
+        "Main points (no more than 3):\n"
         "- point 1\n"
         "- point 2\n\n"
         "Bible references:\n"
