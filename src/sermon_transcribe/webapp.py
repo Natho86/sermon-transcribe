@@ -9,6 +9,7 @@ from dataclasses import replace
 from datetime import datetime
 from functools import partial
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Dict, Optional
 
 from flask import Flask, jsonify, render_template, request, send_file, redirect, url_for, session
@@ -35,6 +36,7 @@ from sermon_transcribe.cleanup import (
     DEFAULT_SUMMARY_MAX_CHARS,
     SUMMARY_DISCLAIMER_TEXT,
 )
+from sermon_transcribe.folder_jobs import FILE_SUFFIXES, FolderJob, file_version, resolve_folder, scan_folder
 from sermon_transcribe.io_utils import ensure_dir
 from sermon_transcribe.settings import (
     load_keys,
@@ -54,6 +56,7 @@ app.config["MAX_CONTENT_LENGTH"] = 4 * 1024 * 1024 * 1024  # 4GB max file size
 app.config["UPLOAD_FOLDER"] = Path("/app/uploads").resolve()
 app.config["OUTPUT_FOLDER"] = Path("/app/output").resolve()
 app.config["MODEL_CACHE"] = Path("/app/model_cache").resolve()
+app.config["SERMON_FOLDER_ROOT"] = os.environ.get("SERMON_FOLDER_ROOT")
 app.config["SESSION_COOKIE_SECURE"] = False  # Set to True in production with HTTPS
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
@@ -170,14 +173,21 @@ def init_model():
 
 def emit_progress(job_id: str, status: str, progress: int, message: str, data: Optional[dict] = None):
     """Emit progress update via WebSocket."""
+    folder_job = False
     with jobs_lock:
         if job_id in jobs:
+            folder_job = jobs[job_id].get("folder_job", False)
+            if folder_job and jobs[job_id]["status"] == "cancelling" and status == "processing":
+                return
             jobs[job_id]["status"] = status
             jobs[job_id]["progress"] = progress
             jobs[job_id]["message"] = message
             jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
             if data:
                 jobs[job_id].update(data)
+
+    if folder_job:
+        return
 
     payload = {
         "job_id": job_id,
@@ -450,15 +460,31 @@ def cleanup_transcript(
         emit_progress(job_id, "processing", 60, "Skipping cleanup (no API key)")
         return
 
-    api_key = provider_info["key"]
-    provider = provider_info["provider"]
+    summary_path = write_cleaned_outputs(job_id, text_path, cleaned_path, provider_info)
+    if summary_path is None:
+        return
 
+    with jobs_lock:
+        jobs[job_id]["text_path"] = str(cleaned_path.absolute())
+        jobs[job_id]["summary_path"] = str(summary_path.absolute())
+
+    emit_progress(job_id, "processing", 90, "Cleanup complete", {
+        "summary_url": f"/download/{job_id}/summary",
+    })
+
+
+def get_provider_model(provider_info: dict) -> str:
+    provider = provider_info["provider"]
     if provider == "openrouter":
-        model_name = provider_info["model"] or DEFAULT_OPENROUTER_MODEL
-    elif provider == "openai":
-        model_name = provider_info["model"] or DEFAULT_OPENAI_MODEL
-    else:
-        model_name = provider_info["model"] or os.environ.get("CLAUDE_MODEL", DEFAULT_MODEL)
+        return provider_info["model"] or DEFAULT_OPENROUTER_MODEL
+    if provider == "openai":
+        return provider_info["model"] or DEFAULT_OPENAI_MODEL
+    return provider_info["model"] or os.environ.get("CLAUDE_MODEL", DEFAULT_MODEL)
+
+
+def write_cleaned_outputs(
+    job_id: str, text_path: Path, cleaned_path: Path, provider_info: dict
+) -> Optional[Path]:
     raw_text = strip_disclaimer(text_path.read_text(encoding="utf-8"))
 
     if not raw_text:
@@ -466,6 +492,7 @@ def cleanup_transcript(
         return
 
     # Clean transcript
+    model_name = get_provider_model(provider_info)
     emit_progress(job_id, "processing", 65, "Cleaning transcript...")
     chunks = split_into_chunks(raw_text, 8000)
     cleaned_chunks = []
@@ -480,12 +507,12 @@ def cleanup_transcript(
         try:
             cleaned = call_llm(
                 prompt=prompt,
-                api_key=api_key,
+                api_key=provider_info["key"],
                 model=model_name,
                 max_tokens=4000,
                 temperature=0.1,
                 timeout=120,
-                provider=provider,
+                provider=provider_info["provider"],
             )
             cleaned_text_chunk = cleaned.strip()
 
@@ -511,20 +538,29 @@ def cleanup_transcript(
     non_empty_chunks = sum(1 for c in cleaned_chunks if c)
     if non_empty_chunks < len(chunks):
         print(f"WARNING: Lost {len(chunks) - non_empty_chunks} chunks during cleaning", flush=True)
-    # Generate summary
+    summary_path = cleaned_path.with_name(f"{cleaned_path.stem}_summary.txt")
+    write_sermon_summary(job_id, cleaned_text, summary_path, provider_info)
+    if is_job_cancelled(job_id):
+        return None
+    cleaned_path.write_text(apply_disclaimer(cleaned_text), encoding="utf-8")
+    return summary_path
+
+
+def write_sermon_summary(job_id: str, cleaned_text: str, summary_path: Path, provider_info: dict):
     emit_progress(job_id, "processing", 80, "Generating summary...")
+    model_name = get_provider_model(provider_info)
 
     def generate(prompt: str) -> str:
         if is_job_cancelled(job_id):
             raise RuntimeError("Job cancelled by user")
         return call_llm(
             prompt=prompt,
-            api_key=api_key,
+            api_key=provider_info["key"],
             model=model_name,
             max_tokens=1200,
             temperature=0.1,
             timeout=120,
-            provider=provider,
+            provider=provider_info["provider"],
         )
 
     if len(cleaned_text) <= DEFAULT_SUMMARY_MAX_CHARS:
@@ -548,17 +584,7 @@ def cleanup_transcript(
     if is_job_cancelled(job_id):
         return
 
-    summary_path = cleaned_path.with_name(f"{cleaned_path.stem}_summary.txt")
     summary_path.write_text(apply_disclaimer(summary, SUMMARY_DISCLAIMER_TEXT), encoding="utf-8")
-    cleaned_path.write_text(apply_disclaimer(cleaned_text), encoding="utf-8")
-
-    with jobs_lock:
-        jobs[job_id]["text_path"] = str(cleaned_path.absolute())
-        jobs[job_id]["summary_path"] = str(summary_path.absolute())
-
-    emit_progress(job_id, "processing", 90, "Cleanup complete", {
-        "summary_url": f"/download/{job_id}/summary",
-    })
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -642,7 +668,9 @@ def logout():
 @login_required
 def index():
     """Main upload page."""
-    response = app.make_response(render_template("index.html"))
+    response = app.make_response(render_template(
+        "index.html", folder_processing_enabled=bool(app.config["SERMON_FOLDER_ROOT"])
+    ))
     # Prevent browser caching to ensure users always get latest version
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
@@ -1688,6 +1716,221 @@ def list_jobs():
     return jsonify({"jobs": job_list})
 
 
+def configured_folder(relative: str) -> tuple[Path, Path]:
+    setting = app.config["SERMON_FOLDER_ROOT"]
+    if not setting:
+        raise FileNotFoundError("Folder processing is not configured")
+    root = Path(setting).resolve()
+    return root, resolve_folder(root, relative)
+
+
+@app.get("/api/sermon-folders")
+@login_required
+def list_sermon_folder():
+    try:
+        relative = request.args.get("folder", "")
+        root, folder = configured_folder(relative)
+        directories, sermons = scan_folder(folder)
+        return jsonify({
+            "folder": folder.relative_to(root).as_posix(),
+            "parent": folder.parent.relative_to(root).as_posix() if folder != root else None,
+            "directories": directories,
+            "sermons": [
+                {
+                    "name": item.stem,
+                    "files": [path.name for paths in item.files.values() for path in paths],
+                    "has_wav": item.has_wav(),
+                    "has_transcript": item.has_source("transcript"),
+                }
+                for item in sermons.values()
+            ],
+        })
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except FileNotFoundError as exc:
+        return jsonify({"error": str(exc)}), 404
+    except OSError:
+        return jsonify({"error": "The folder could not be read"}), 403
+
+
+def verify_folder_job(plan: FolderJob):
+    if plan.source.parent.resolve() != plan.source.parent:
+        raise RuntimeError("The sermon folder moved or changed")
+    if any(file_version(path) != version for path, version in plan.versions.items()):
+        raise RuntimeError("A source file or output changed. Scan the folder and retry.")
+
+
+def process_folder_jobs(
+    batch: list[tuple[str, FolderJob]], action: str, do_cleanup: bool, provider_info: Optional[dict]
+):
+    for job_id, plan in batch:
+        with processing_semaphore:
+            try:
+                if is_job_cancelled(job_id):
+                    emit_progress(job_id, "cancelled", 0, "Job cancelled by user")
+                    continue
+                verify_folder_job(plan)
+                with TemporaryDirectory(prefix=".sermon-", dir=plan.source.parent) as tmp:
+                    work = Path(tmp)
+                    staged = {
+                        kind: work / f"{plan.source.stem}{FILE_SUFFIXES[kind]}"
+                        for kind in plan.destinations
+                    }
+                    if action == "summaries":
+                        transcript = strip_disclaimer(plan.source.read_text(encoding="utf-8"))
+                        if not transcript:
+                            raise RuntimeError("The saved transcript is empty")
+                        write_sermon_summary(job_id, transcript, staged["summary"], provider_info)
+                    else:
+                        emit_progress(job_id, "processing", 15, "Transcribing audio...")
+                        result = transcribe_file(
+                            model=model,
+                            source_path=plan.source,
+                            output_dir=work,
+                            config=config,
+                            convert_flac=False,
+                            raw_suffix="_timestamps",
+                        )
+                        if is_job_cancelled(job_id):
+                            emit_progress(job_id, "cancelled", 0, "Job cancelled by user")
+                            continue
+                        if action == "full":
+                            converted = convert_audio(job_id, plan.source, work, True, True)
+                            if not {"m4a_path", "flac_path"} <= converted.keys():
+                                raise RuntimeError("Audio conversion failed")
+                        if do_cleanup:
+                            write_cleaned_outputs(job_id, result.text_path, staged["transcript"], provider_info)
+                        else:
+                            shutil.copyfile(result.text_path, staged["transcript"])
+
+                    if is_job_cancelled(job_id):
+                        emit_progress(job_id, "cancelled", 0, "Job cancelled by user")
+                        continue
+                    if not all(path.is_file() and path.stat().st_size > 0 for path in staged.values()):
+                        raise RuntimeError("Processing did not produce all requested outputs")
+
+                    emit_progress(job_id, "processing", 95, "Saving files to the sermon folder...")
+                    verify_folder_job(plan)
+                    for kind, destination in plan.destinations.items():
+                        if plan.versions[destination] is not None:
+                            shutil.copymode(destination, staged[kind])
+                    with cancelled_lock:
+                        cancelled = job_id in cancelled_jobs
+                        if not cancelled:
+                            for kind, destination in plan.destinations.items():
+                                staged[kind].replace(destination)
+                if cancelled:
+                    emit_progress(job_id, "cancelled", 0, "Job cancelled by user")
+                else:
+                    emit_progress(job_id, "completed", 100, "Files saved to the sermon folder")
+            except Exception as exc:
+                if is_job_cancelled(job_id):
+                    emit_progress(job_id, "cancelled", 0, "Job cancelled by user")
+                else:
+                    emit_progress(job_id, "failed", 0, f"Error: {exc}")
+
+
+@app.post("/api/folder-jobs")
+@login_required
+def queue_folder_jobs():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Invalid folder job request"}), 400
+    action = data.get("action")
+    selected = data.get("sermons")
+    relative = data.get("folder")
+    cleanup = data.get("cleanup", True)
+    if (
+        action not in ("full", "transcriptions", "summaries")
+        or not isinstance(relative, str) or not isinstance(cleanup, bool)
+        or not isinstance(selected, list) or not selected
+        or not all(isinstance(name, str) for name in selected)
+    ):
+        return jsonify({"error": "Choose a folder, sermons and a bulk action"}), 400
+
+    do_cleanup = action == "full" or (action == "transcriptions" and cleanup)
+    try:
+        root, folder = configured_folder(relative)
+        _, sermons = scan_folder(folder)
+        plans = []
+        for name in dict.fromkeys(selected):
+            sermon = sermons.get(name)
+            if sermon is None:
+                raise ValueError("The selected files changed. Scan the folder and try again.")
+            if action == "summaries":
+                if not sermon.has_source("transcript"):
+                    raise ValueError(f"{name} needs a saved transcript to regenerate its summary")
+                source = sermon.files["transcript"][0]
+                kinds = ["summary"]
+            else:
+                if not sermon.has_wav():
+                    raise ValueError(f"{name} needs one unambiguous WAV file to retranscribe")
+                source = sermon.files["wav"][0]
+                kinds = ["transcript", "timestamps"]
+                if sermon.files.get("timestamps_text"):
+                    kinds.append("timestamps_text")
+                if do_cleanup:
+                    kinds.append("summary")
+                if action == "full":
+                    kinds.extend(("m4a", "flac"))
+            destinations = {kind: sermon.destination(folder, kind) for kind in kinds}
+            versions = {path: file_version(path) for path in (source, *destinations.values())}
+            if not versions[source] or versions[source][2] == 0:
+                raise ValueError(f"The source file for {name} is missing or empty")
+            key = (folder.relative_to(root) / name).as_posix()
+            plans.append(FolderJob(key, source, destinations, versions))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except FileNotFoundError as exc:
+        return jsonify({"error": str(exc)}), 404
+    except OSError:
+        return jsonify({"error": "The folder could not be read"}), 403
+
+    provider = get_active_provider() if do_cleanup or action == "summaries" else None
+    if (do_cleanup or action == "summaries") and not provider:
+        return jsonify({"error": "Configure an AI API key in Settings for this action"}), 400
+
+    with jobs_lock:
+        busy = {
+            job["folder_key"]
+            for job in jobs.values()
+            if job.get("folder_job") and job["status"] in ("queued", "processing", "cancelling")
+        }
+        if any(plan.key in busy for plan in plans):
+            return jsonify({"error": "A selected sermon already has a running or queued job"}), 409
+        queued = []
+        batch = []
+        now = datetime.utcnow().isoformat()
+        for plan in plans:
+            job_id = secrets.token_hex(16)
+            job = {
+                "job_id": job_id,
+                "folder_job": True,
+                "folder_key": plan.key,
+                "filename": plan.key,
+                "status": "queued",
+                "progress": 0,
+                "message": "Folder job queued",
+                "created_at": now,
+                "updated_at": now,
+            }
+            jobs[job_id] = job
+            queued.append(job.copy())
+            batch.append((job_id, plan))
+
+    thread = threading.Thread(
+        target=process_folder_jobs, args=(batch, action, do_cleanup, provider), daemon=True
+    )
+    try:
+        thread.start()
+    except RuntimeError:
+        with jobs_lock:
+            for job_id, _ in batch:
+                jobs.pop(job_id, None)
+        return jsonify({"error": "Could not start the folder jobs"}), 503
+    return jsonify({"jobs": queued}), 202
+
+
 @app.route("/summary-disclaimer")
 @login_required
 def summary_disclaimer():
@@ -1797,6 +2040,13 @@ def cancel_job(job_id: str):
         # Only allow cancellation of queued or processing jobs
         if job["status"] not in ["queued", "processing"]:
             return jsonify({"error": f"Cannot cancel job with status: {job['status']}"}), 400
+        if job.get("folder_job"):
+            if job["progress"] >= 95:
+                return jsonify({"error": "This job is already saving its outputs"}), 409
+            with cancelled_lock:
+                cancelled_jobs.add(job_id)
+            job.update(status="cancelling", message="Cancelling job...", updated_at=datetime.utcnow().isoformat())
+            return jsonify({"success": True, "message": "Job cancellation requested"})
 
     # Add job to cancelled set
     with cancelled_lock:
@@ -1816,6 +2066,13 @@ def delete_job(job_id: str):
         job = jobs.get(job_id)
         if not job:
             return jsonify({"error": "Job not found"}), 404
+        if job.get("folder_job"):
+            if job["status"] not in ("completed", "failed", "cancelled"):
+                return jsonify({"error": "Wait for this folder job to finish"}), 409
+            del jobs[job_id]
+            with cancelled_lock:
+                cancelled_jobs.discard(job_id)
+            return jsonify({"success": True, "message": "Folder job removed"})
 
     try:
         # Delete output directory
