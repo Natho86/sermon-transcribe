@@ -194,6 +194,14 @@
                     </div>
                     <div id="newCompatibleStatus" role="status" class="st-key-verify-result"></div>
                 </div>
+                <div class="st-form-group" style="margin-bottom:10px;">
+                    <label class="st-label" for="newThinking">Thinking</label>
+                    <select class="st-select" id="newThinking">
+                        <option value="">Server default</option>
+                        <option value="on">On</option>
+                        <option value="off">Off</option>
+                    </select>
+                </div>
             </div>
 
             <!-- Model selector — shown for OpenRouter / OpenAI -->
@@ -276,7 +284,8 @@
                 <span class="st-badge ${k.enabled ? 'st-badge-active' : 'st-badge-inactive'}">${k.enabled ? 'Active' : 'Inactive'}</span>
             </div>
             <div class="st-key-masked">${escHtml(k.masked_key || 'No API key')}</div>
-            ${compatible ? `<div class="st-key-model"><code>${escHtml(k.base_url)}</code></div>` : ''}
+            ${compatible ? `<div class="st-key-model"><code>${escHtml(k.base_url)}</code></div>
+                <div class="st-key-model">Thinking · ${k.enable_thinking == null ? 'Server default' : (k.enable_thinking ? 'On' : 'Off')}</div>` : ''}
             ${modelLine}
             <div class="st-key-verify-result" id="verify-${k.id}"></div>
 
@@ -313,6 +322,14 @@
                         : `<input class="st-input" type="text" id="edit-model-${k.id}" value="${escHtml(k.model || '')}" placeholder="${compatible ? 'Model ID from the server' : 'e.g. claude-opus-4-8 (leave blank for default)'}">`
                     }
                 </div>
+                ${compatible ? `<div class="st-form-group" style="margin-bottom:10px;">
+                    <label class="st-label" for="edit-thinking-${k.id}">Thinking</label>
+                    <select class="st-select" id="edit-thinking-${k.id}">
+                        <option value="" ${k.enable_thinking == null ? 'selected' : ''}>Server default</option>
+                        <option value="on" ${k.enable_thinking === true ? 'selected' : ''}>On</option>
+                        <option value="off" ${k.enable_thinking === false ? 'selected' : ''}>Off</option>
+                    </select>
+                </div>` : ''}
                 <div class="st-form-actions">
                     <button class="st-btn st-btn-primary st-btn-sm" onclick="saveEdit('${k.id}')">Save</button>
                     <button class="st-btn st-btn-secondary st-btn-sm" onclick="cancelEdit('${k.id}')">Cancel</button>
@@ -514,6 +531,7 @@
         const body = {label, provider, key, model};
         if (compatible) {
             body.base_url = document.getElementById('newBaseUrl').value.trim();
+            body.enable_thinking = thinkingOverride('newThinking');
             if (!body.base_url || !model) return showToast('Base URL and model ID are required', 'error');
         }
 
@@ -532,6 +550,7 @@
             document.getElementById('newAnthropicModel').value = '';
             document.getElementById('newBaseUrl').value = '';
             document.getElementById('newCompatibleModel').value = '';
+            document.getElementById('newThinking').value = '';
             document.getElementById('newCompatibleStatus').textContent = '';
             document.getElementById('compatibleModels').replaceChildren();
             document.getElementById('addKeyForm').classList.remove('visible');
@@ -556,6 +575,7 @@
         const baseUrl = document.getElementById(`edit-base-url-${id}`);
         if (baseUrl) {
             body.base_url = baseUrl.value.trim();
+            body.enable_thinking = thinkingOverride(`edit-thinking-${id}`);
             if (!key && document.getElementById(`clear-key-${id}`)?.checked) body.key = '';
         }
         const resp = await fetch(`/api/settings/keys/${id}`, {
@@ -566,6 +586,11 @@
         const data = await resp.json();
         if (data.success) { showToast('Provider updated', 'success'); await loadKeys(); }
         else showToast(data.error || 'Failed to update provider', 'error');
+    }
+
+    function thinkingOverride(id) {
+        const value = document.getElementById(id).value;
+        return value === '' ? null : value === 'on';
     }
 
     // ── Enable / delete / verify ──────────────────────────────────────────

@@ -55,6 +55,8 @@ def get_active_provider() -> Optional[dict]:
             }
             if provider["provider"] == COMPATIBLE_PROVIDER:
                 provider["base_url"] = entry["base_url"]
+                if "enable_thinking" in entry:
+                    provider["enable_thinking"] = entry["enable_thinking"]
             return provider
     env_key = os.environ.get("ANTHROPIC_API_KEY")
     if env_key:

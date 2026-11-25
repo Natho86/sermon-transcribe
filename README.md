@@ -291,6 +291,8 @@ docker run --rm \
 
 If Sermon Transcribe runs on another host, configure llama.cpp to listen on your desktop's LAN address.
 
+Set **Thinking** to **On** or **Off** to override thinking for cleanup and summary requests on models that support it. **Server default** uses the server's existing configuration.
+
 The active provider handles transcript cleanup and summaries, including folder jobs. Speech transcription still uses Whisper. You can switch back to OpenRouter by enabling its saved provider.
 
 ### Anthropic API Key

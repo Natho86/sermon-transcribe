@@ -482,6 +482,7 @@ def call_openai(
     max_retries: int = 3,
     *,
     base_url: Optional[str] = None,
+    enable_thinking: Optional[bool] = None,
 ) -> str:
     """Call OpenAI or a compatible chat completions endpoint."""
     if base_url is None:
@@ -495,6 +496,8 @@ def call_openai(
         "temperature": temperature,
         "messages": [{"role": "user", "content": prompt}],
     }
+    if base_url is not None and enable_thinking is not None:
+        payload["chat_template_kwargs"] = {"enable_thinking": enable_thinking}
     data = json.dumps(payload).encode("utf-8")
     headers = {"content-type": "application/json"}
     if api_key:
@@ -546,6 +549,7 @@ def call_llm(
     max_retries: int = 3,
     *,
     base_url: Optional[str] = None,
+    enable_thinking: Optional[bool] = None,
 ) -> str:
     """Dispatch an LLM call to the appropriate provider."""
     if provider == "openrouter":
@@ -570,6 +574,7 @@ def call_llm(
             timeout=timeout,
             max_retries=max_retries,
             base_url=base_url if provider == COMPATIBLE_PROVIDER else None,
+            enable_thinking=enable_thinking if provider == COMPATIBLE_PROVIDER else None,
         )
     return call_claude(
         prompt=prompt,

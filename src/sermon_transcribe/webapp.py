@@ -520,6 +520,7 @@ def write_cleaned_outputs(
                 timeout=120,
                 provider=provider_info["provider"],
                 base_url=provider_info.get("base_url"),
+                enable_thinking=provider_info.get("enable_thinking"),
             )
             cleaned_text_chunk = cleaned.strip()
 
@@ -569,6 +570,7 @@ def write_sermon_summary(job_id: str, cleaned_text: str, summary_path: Path, pro
             timeout=120,
             provider=provider_info["provider"],
             base_url=provider_info.get("base_url"),
+            enable_thinking=provider_info.get("enable_thinking"),
         )
 
     if len(cleaned_text) <= DEFAULT_SUMMARY_MAX_CHARS:
@@ -715,6 +717,7 @@ def api_get_keys():
             "enabled": entry.get("enabled", False),
             "masked_key": masked_key,
             "base_url": entry.get("base_url", ""),
+            "enable_thinking": entry.get("enable_thinking"),
         })
     env_key = os.environ.get("ANTHROPIC_API_KEY", "")
     env_configured = bool(env_key)
@@ -755,6 +758,11 @@ def api_add_key():
     if provider == COMPATIBLE_PROVIDER:
         if not model:
             return jsonify({"error": "Model ID is required"}), 400
+        enable_thinking = body.get("enable_thinking")
+        if enable_thinking is not None and not isinstance(enable_thinking, bool):
+            return jsonify({"error": "Thinking must be On, Off, or Server default"}), 400
+        if enable_thinking is not None:
+            new_entry["enable_thinking"] = enable_thinking
         try:
             new_entry["base_url"] = compatible_base_url(body.get("base_url", ""))
         except ValueError as exc:
@@ -788,6 +796,14 @@ def api_update_key(key_id: str):
         model = body.get("model", entry.get("model", ""))
         if not model.strip():
             return jsonify({"error": "Model ID is required"}), 400
+        if "enable_thinking" in body:
+            enable_thinking = body["enable_thinking"]
+            if enable_thinking is None:
+                entry.pop("enable_thinking", None)
+            elif isinstance(enable_thinking, bool):
+                entry["enable_thinking"] = enable_thinking
+            else:
+                return jsonify({"error": "Thinking must be On, Off, or Server default"}), 400
         if "key" in body or base_url != entry.get("base_url"):
             entry["key"] = body.get("key", "").strip()
         entry["base_url"] = base_url
