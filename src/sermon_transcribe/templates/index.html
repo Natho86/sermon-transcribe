@@ -332,7 +332,13 @@
 
         <!-- Options card -->
         <div class="st-card st-option-block">
-            <div class="st-option-row">
+            <div id="transcriptionOnlyOption">
+                <label class="st-option-row st-option-title">
+                    <input type="checkbox" id="transcriptionOnly">
+                    <span>Transcribe only <span class="st-option-hint">Generate the transcript and timestamps.</span></span>
+                </label>
+            </div>
+            <div class="st-option-row" id="cleanupOption">
                 <input type="checkbox" id="cleanupCheckbox" checked>
                 <div>
                     <label for="cleanupCheckbox" class="st-option-title" style="cursor:pointer;">Clean &amp; summarize with AI</label>
@@ -483,6 +489,7 @@
                     <select class="st-select" id="folderAction">
                         <option value="">Choose an action</option>
                         <option value="full">Fully reprocess WAVs</option>
+                        <option value="transcription-only">Transcribe WAVs only</option>
                         <option value="transcriptions">Regenerate transcriptions</option>
                         <option value="summaries">Regenerate summaries</option>
                     </select>
@@ -589,6 +596,7 @@
     const uploadBtn = document.getElementById('uploadBtn');
     const jobList = document.getElementById('jobList');
     const cleanupCheckbox = document.getElementById('cleanupCheckbox');
+    const transcriptionOnly = document.getElementById('transcriptionOnly');
     const systemMessages = document.getElementById('systemMessages');
     const audioModeBtn = document.getElementById('audioModeBtn');
     const transcriptModeBtn = document.getElementById('transcriptModeBtn');
@@ -727,6 +735,7 @@
             all.checked = eligible.length > 0 && selected.length === eligible.length;
             all.indeterminate = selected.length > 0 && !all.checked;
             action.querySelector('[value="full"]').disabled = !hasWavs;
+            action.querySelector('[value="transcription-only"]').disabled = !hasWavs;
             action.querySelector('[value="transcriptions"]').disabled = !hasWavs;
             action.querySelector('[value="summaries"]').disabled = !hasTranscripts;
             if (action.selectedOptions[0]?.disabled) action.value = '';
@@ -735,6 +744,7 @@
 
             const changes = {
                 full: 'Saves a transcript, timestamps, summary, M4A and FLAC to the job output folder.',
+                'transcription-only': 'Saves a transcript and timestamps to the job output folder.',
                 transcriptions: cleanup.checked
                     ? 'Saves a transcript, timestamps and summary to the job output folder.'
                     : 'Saves a transcript and timestamps to the job output folder.',
@@ -822,7 +832,11 @@
             event.preventDefault();
             const sermons = updateFolderSelection();
             if (submit.disabled) return;
-            const payload = {folder: current.folder, action: action.value, cleanup: cleanup.checked, sermons};
+            const only = action.value === 'transcription-only';
+            const payload = {
+                folder: current.folder, action: only ? 'transcriptions' : action.value,
+                cleanup: !only && cleanup.checked, sermons,
+            };
             pending = true;
             status.textContent = '';
             updateFolderControls();
@@ -849,26 +863,38 @@
         });
     }
 
+    function updateUploadOptions() {
+        const audio = uploadMode === 'audio';
+        document.getElementById('transcriptionOnlyOption').hidden = !audio;
+        document.getElementById('cleanupOption').style.display = audio && transcriptionOnly.checked ? 'none' : '';
+        audioConversionOptions.hidden = !audio || transcriptionOnly.checked;
+    }
+
+    transcriptionOnly.addEventListener('change', updateUploadOptions);
+    updateUploadOptions();
+
     // Mode toggle handlers
     audioModeBtn.addEventListener('click', () => {
+        if (isUploading) return;
         uploadMode = 'audio';
         audioModeBtn.classList.add('active');
         transcriptModeBtn.classList.remove('active');
         fileInput.accept = '.wav,.mp3,.flac,.m4a,.aac';
         uploadPrompt.textContent = 'Click to browse or drag files here';
         uploadHint.textContent = 'WAV, MP3, FLAC, M4A, AAC — up to 4GB per file';
-        audioConversionOptions.style.display = 'block';
+        updateUploadOptions();
         resetUpload();
     });
 
     transcriptModeBtn.addEventListener('click', () => {
+        if (isUploading) return;
         uploadMode = 'transcript';
         transcriptModeBtn.classList.add('active');
         audioModeBtn.classList.remove('active');
         fileInput.accept = '.txt';
         uploadPrompt.textContent = 'Click to browse or drag files here';
         uploadHint.textContent = 'Plain text (.txt) files';
-        audioConversionOptions.style.display = 'none';
+        updateUploadOptions();
         resetUpload();
     });
 
@@ -990,12 +1016,21 @@
     // Upload
     uploadBtn.addEventListener('click', async () => {
         try {
-            if (selectedFiles.length === 0) {
+            if (isUploading || selectedFiles.length === 0) {
                 return;
             }
 
             uploadBtn.disabled = true;
             isUploading = true;
+            const audio = uploadMode === 'audio';
+            const only = audio && transcriptionOnly.checked;
+            const options = {
+                cleanup: !only && cleanupCheckbox.checked,
+                convert_m4a: audio && !only && convertM4aCheckbox.checked,
+                convert_flac: audio && !only && convertFlacCheckbox.checked,
+                language: languageSelect.value,
+            };
+            const files = [...selectedFiles];
 
             // Acquire wake lock to prevent screen sleep during upload (non-blocking)
             try {
@@ -1008,10 +1043,12 @@
             document.querySelectorAll('.st-queue-remove').forEach(btn => btn.disabled = true);
 
             // Start processing queue
-            uploadQueue = selectedFiles.map((file, index) => ({
+            uploadQueue = files.map((file, index) => ({
                 file: file,
                 index: index,
-                status: 'pending'
+                status: 'pending',
+                audio,
+                options,
             }));
 
             processNextFile();
@@ -1045,10 +1082,10 @@
         }
 
         nextItem.status = 'uploading';
-        uploadFile(nextItem.file, nextItem.index);
+        uploadFile(nextItem);
     }
 
-    async function uploadFileChunked(file, index) {
+    async function uploadFileChunked(file, index, options) {
         const queueItem = queueList.querySelector(`[data-index="${index}"]`);
         const statusEl = queueItem.querySelector('.st-queue-status');
         const progressFill = queueItem.querySelector('.st-queue-progress-fill');
@@ -1115,13 +1152,7 @@
             const startResponse = await fetch('/upload/start', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    upload_id: uploadId,
-                    cleanup: cleanupCheckbox.checked,
-                    convert_m4a: uploadMode === 'audio' ? convertM4aCheckbox.checked : false,
-                    convert_flac: uploadMode === 'audio' ? convertFlacCheckbox.checked : false,
-                    language: uploadMode === 'audio' ? languageSelect.value : ''
-                })
+                body: JSON.stringify({upload_id: uploadId, ...options})
             });
 
             if (!startResponse.ok) {
@@ -1161,11 +1192,11 @@
         return 'upload_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
     }
 
-    function uploadFile(file, index) {
+    function uploadFile({file, index, audio, options}) {
         // Use chunked upload for larger audio files to avoid large single-request failures behind tunnels/proxies.
         // Transcript uploads still use the direct endpoint because there is no chunked transcript flow.
-        if (uploadMode === 'audio') {
-            return uploadFileChunked(file, index);
+        if (audio) {
+            return uploadFileChunked(file, index, options);
         }
 
         // Standard upload for small files or desktop browsers
@@ -1179,19 +1210,10 @@
         statusEl.textContent = 'Uploading';
 
         const formData = new FormData();
-        const fieldName = uploadMode === 'audio' ? 'audio' : 'transcript';
-        formData.append(fieldName, file);
-        formData.append('cleanup', cleanupCheckbox.checked);
-
-        // Add audio conversion options if in audio mode
-        if (uploadMode === 'audio') {
-            formData.append('convert_m4a', convertM4aCheckbox.checked);
-            formData.append('convert_flac', convertFlacCheckbox.checked);
-            formData.append('language', languageSelect.value);
-        }
-
+        formData.append('transcript', file);
+        formData.append('cleanup', options.cleanup);
         const xhr = new XMLHttpRequest();
-        const endpoint = uploadMode === 'audio' ? '/upload' : '/upload-transcript';
+        const endpoint = '/upload-transcript';
 
         // Set timeout for mobile compatibility (10 minutes for large files)
         xhr.timeout = 600000; // 10 minutes in milliseconds
@@ -1453,6 +1475,7 @@
                     <a href="{{ url_for('summary_disclaimer') }}" class="view-file" data-url="{{ url_for('summary_disclaimer') }}" data-type="summary-disclaimer" data-filename="summary-disclaimer.txt">View summary disclaimer</a>
                 ` : ''}
                 <div class="st-group-label">Download</div>
+                <a href="/download/${job.job_id}/text" download>Download transcript</a>
                 ${job.m4a_url ? `<a href="${job.m4a_url}" download>Download M4A</a>` : ''}
                 ${job.flac_url ? `<a href="${job.flac_url}" download>Download FLAC</a>` : ''}
                 <a href="#" class="download-all-btn" data-job-id="${job.job_id}">Download all files</a>

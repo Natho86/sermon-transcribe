@@ -51,6 +51,8 @@ A powerful audio transcription application designed for processing sermon record
 
 Use **Reprocess** in the job actions menu to retranscribe the audio, clean and summarise the saved transcript with AI, or run both steps in order. AI cleanup uses the active provider in **Settings**.
 
+For audio uploads, select **Transcribe only** to generate a raw transcript and timestamps. Once the job completes, choose **Download transcript** from its **⋮** menu to save the text file.
+
 Under **Jobs**, tick the completed sermons you want to delete and choose **Delete selected**. **Select all visible completed jobs** selects the current search and filter results. Selections are kept when you change filters. Confirming deletion removes each job's uploaded or imported files and its outputs from the server.
 
 ### Process a server folder
@@ -71,6 +73,7 @@ In the dashboard, open **Process a folder** and navigate to a month such as `202
 | Action | Required source | Files written |
 | --- | --- | --- |
 | Fully reprocess WAVs | WAV | Transcript, timestamps JSON, summary, M4A, and FLAC |
+| Transcribe WAVs only | WAV | Raw transcript and timestamps JSON |
 | Regenerate transcriptions | WAV | Transcript and timestamps JSON. With AI cleanup enabled, also regenerates the summary. |
 | Regenerate summaries | Saved transcript `<name>.txt` | Copy of the transcript and a new summary |
 
