@@ -1,24 +1,34 @@
 """Verify proposed sermon points against the saved transcript."""
 
+import logging
 import re
+from collections import Counter
 
 NO_POINTS = "None noted."
-MAX_POINTS = 3
+MAX_POINTS = 5
 QUOTE_SEPARATOR = "||"
+logger = logging.getLogger("sermon_transcribe.ai.points")
 
 BOUNDARY = re.compile(r"(?<=[.!?])[\"'”’\)\]]*\s+|\n[ \t]*\n+")
 WORD = re.compile(r"[^\W_]+(?:'[^\W_]+)*")
 APOSTROPHES = str.maketrans("‘’", "''")
-ORDINAL = r"(?:first|second|third|fourth|next|final|last)"
+ORDINAL = r"(?:first|second|third|fourth|fifth|next|final|last)"
 OUTLINE = re.compile(
-    rf"^[\"'“‘(\s]*(?:(?:and|now|so)\s+)*"
-    rf"(?:(?:firstly|secondly|thirdly|finally)\b\s*[,:]?\s*"
-    rf"|(?:{ORDINAL}|(?:point|number) (?:one|two|three|[1-3]))\s*[,:]\s*"
-    rf"|(?:(?:the|my|our)\s+)?{ORDINAL}(?:\s+(?:point|heading|question|thing))?"
-    rf"(?:\s+(?:is|will be)\b\s*[:,]?\s*|\s*[,:]\s*))",
+    rf"^[\"'“‘(\s]*(?:(?:and|now|so|that['’]s)\b[:,]?\s+)*"
+    rf"(?:(?:firstly|secondly|thirdly|fourthly|fifthly|finally|first of all)\b\s*[,:]?\s*"
+    rf"|(?:{ORDINAL}|(?:point|number) (?:one|two|three|four|five|[1-5]))\s*[,:]\s*"
+    rf"|(?:(?:the|my|our)\s+)?{ORDINAL}(?:\s+(?:point|heading|question|thing|one))?"
+    rf"(?:\s+(?:is|will be|relates to)\b\s*[:,]?\s*|\s*[,:]\s*))",
     re.I,
 )
 ABBREVIATION = re.compile(r"\b(?:mr|mrs|ms|dr|rev|st|cf|v|vv|e\.g|i\.e)\.(?=\s)", re.I)
+LEAD_IN = re.compile(r"^(?:(?:and|now|so)\b[:,]?\s+)+", re.I)
+HEADING_LEAD_IN = re.compile(
+    r"^(?:(?:we['’]ll|we will) (?:think|talk) about )?(?:the )?question of\s+", re.I,
+)
+POINT_LEAD_IN = re.compile(r"^(?:is )?that\s+", re.I)
+HEADING_LINK = re.compile(r"^([^,]+),\s+which is that\s+(.+)$", re.I)
+LIST_MARKER = re.compile(r"^(?:[-*•–—]|[0-9]+[.)])\s+")
 
 
 def sentences(text: str) -> list[str]:
@@ -40,9 +50,19 @@ def words(text: str) -> str:
     return " ".join(WORD.findall(text.translate(APOSTROPHES).casefold()))
 
 
+def _parallel_points(text: str) -> list[str]:
+    clauses = re.split(r"\s*,\s*(?:and\s+)?|\s+and\s+", LEAD_IN.sub("", text), flags=re.I)
+    keys = [words(clause).split() for clause in clauses]
+    # Require a repeated opening across the whole list. Never split off a
+    # fragment of a claim or discard a qualifier to make a point fit.
+    if len(keys) < 2 or not all(len(key) >= 3 and key[:2] == keys[0][:2] for key in keys):
+        return []
+    return [" ".join(key) for key in keys]
+
+
 def _outline_points(transcript: str):
     """Yield wording from complete outline statements and its source position."""
-    parts = sentences(transcript)
+    parts = [" ".join(part.split()) for part in sentences(transcript)]
     for index, sentence in enumerate(parts):
         body = OUTLINE.sub("", sentence, count=1)
         announced = body != sentence
@@ -51,37 +71,99 @@ def _outline_points(transcript: str):
             colon and (not statement or statement[:1].isspace())
             and heading.rstrip()[-1:].isalpha() and 1 <= len(words(heading).split()) <= 8
         )
+        variants = [body]
+        if announced:
+            variants.append(HEADING_LEAD_IN.sub("", POINT_LEAD_IN.sub("", body)))
         if announced or labelled:
-            if point := words(body):
-                yield point, index
+            for variant in variants:
+                if point := words(variant):
+                    yield point, (index, 0), point
+        if announced and (link := HEADING_LINK.fullmatch(body)):
+            heading, statement = link.groups()
+            heading = HEADING_LEAD_IN.sub("", heading)
+            if 1 <= len(words(heading).split()) <= 8:
+                yield words(f"{heading} {statement}"), (index, 0), words(body)
         is_heading = (announced and not colon and 1 <= len(words(body).split()) <= 8) or (labelled and not statement)
         if is_heading and index + 1 < len(parts):
             # Keep an announced heading and its adjacent statement together.
             following = parts[index + 1]
             if not OUTLINE.match(following):
-                yield words(f"{body} {following}"), index
+                for variant in variants:
+                    point = words(f"{variant} {following}")
+                    yield point, (index, 0), point
+        for clause_index, point in enumerate(_parallel_points(body), 1):
+            yield point, (index, clause_index), point
 
 
-def verified_main_points(bullets: list[str], transcript: str) -> list[str]:
-    proposed = []
-    for bullet in bullets:
-        point, separator, quote = bullet.partition(QUOTE_SEPARATOR)
-        if separator and point.strip() and quote.strip() and QUOTE_SEPARATOR not in quote:
-            proposed.append((point.strip(), words(quote)))
-    if not proposed:
+def _point_entries(section: str) -> list[str]:
+    entries = []
+    if section.strip() == NO_POINTS:
+        return entries
+    for raw in section.splitlines():
+        if not (line := raw.strip()):
+            continue
+        if marker := LIST_MARKER.match(line):
+            entries.append(line[marker.end():])
+        elif entries:
+            entries[-1] += f" {line}"
+        else:
+            entries.append(line)
+    return entries
+
+
+def log_point_notes(notes: str, job_id, stage: str):
+    section = re.search(r"(?im)^Announced points and headings:\s*\n(.*?)(?=^Bible passages:|\Z)", notes, re.S)
+    entries = _point_entries(section[1]) if section else []
+    logger.info("AI point notes job=%s stage=%s generated=%d with_evidence=%d", job_id, stage, len(entries),
+                sum(bool(entry.partition(QUOTE_SEPARATOR)[2].strip()) for entry in entries))
+
+
+def verified_main_points(section: str, transcript: str, *, job_id=None) -> list[str]:
+    entries = _point_entries(section)
+    if not entries:
+        logger.info("AI main points job=%s generated=0 parsed=0 verified=0 rejected=0 reasons={}", job_id)
         return []
-
     source = f" {words(transcript)} "
     candidates = {}
-    for wording, position in _outline_points(transcript):
-        candidates.setdefault(wording, position)
+    for wording, position, proof in _outline_points(transcript):
+        candidates.setdefault(wording, []).append((position, proof))
     verified = {}
-    for point, quote in proposed:
-        key = words(point)
-        position = candidates.get(key)
-        if position is None or f" {key} " not in f" {quote} " or f" {quote} " not in source:
+    reasons = Counter()
+    parsed = 0
+    for entry in entries:
+        point, separator, quote = (part.strip() for part in entry.partition(QUOTE_SEPARATOR))
+        if not separator or not quote:
+            reasons["missing_quotation"] += 1
             continue
-        if position not in verified or len(key) > len(words(verified[position])):
+        if not point or QUOTE_SEPARATOR in quote or not words(quote):
+            reasons["malformed_evidence"] += 1
+            continue
+        parsed += 1
+        quote = words(quote)
+        key = words(point)
+        matches = candidates.get(key, [])
+        # Preserve the first announced position while accepting an exact
+        # supporting quotation from a later repetition of the same point.
+        position = matches[0][0] if matches else None
+        if f" {quote} " not in source:
+            reasons["quotation_not_in_transcript"] += 1
+        elif not key or not (
+            f" {key} " in f" {quote} " or any(f" {proof} " in f" {quote} " for _, proof in matches)
+        ):
+            reasons["point_not_in_quotation"] += 1
+        elif position is None:
+            reasons["no_matching_outline_or_parallel_clause"] += 1
+        elif position not in verified:
             verified[position] = point
+        else:
+            reasons["duplicate_outline_position"] += 1
+            if len(key) > len(words(verified[position])):
+                verified[position] = point
 
+    reasons["point_limit"] += max(0, len(verified) - MAX_POINTS)
+    logger.info(
+        "AI main points job=%s generated=%d parsed=%d verified=%d rejected=%d reasons=%s",
+        job_id, len(entries), parsed, min(len(verified), MAX_POINTS), sum(reasons.values()),
+        {reason: count for reason, count in reasons.items() if count},
+    )
     return [verified[position] for position in sorted(verified)[:MAX_POINTS]]

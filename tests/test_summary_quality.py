@@ -56,7 +56,7 @@ class PromptTests(unittest.TestCase):
         self.assertIn("suitable for publication", direct)
         self.assertIn("Consider every section", merge)
         self.assertIn(f"maximum of {cleanup.SUMMARY_MAX_WORDS} words", shared)
-        self.assertIn("Extract up to three main points", shared)
+        self.assertIn("Extract up to 5 main points", shared)
         self.assertIn(f"a maximum of {MAX_REFERENCES} references in total", shared)
         self.assertEqual(shared.count("- <extracted main point> || <verbatim supporting quotation>"), 1)
         self.assertEqual(shared.count("- <Bible reference>"), 1)
@@ -84,7 +84,7 @@ class ValidationTests(unittest.TestCase):
         self.assertIn("41 words", cleanup.summary_validation_error(valid.replace(paragraph, paragraph + " word")))
         self.assertIn("one paragraph", cleanup.summary_validation_error(valid.replace(paragraph, "First.\n\nSecond.")))
         self.assertIn("exact headings", cleanup.summary_validation_error(FINAL.replace("Summary:", "Synopsis:")))
-        self.assertIn("Use up to 3", cleanup.summary_validation_error(
+        self.assertIn("Use up to 5", cleanup.summary_validation_error(
             FINAL.replace("None noted.", "1. First\n- Second\n- Third\n- Fourth")
         ))
         self.assertIn("distinct", cleanup.summary_validation_error(
@@ -179,9 +179,9 @@ class ValidationTests(unittest.TestCase):
             with self.subTest(reference=bad):
                 self.assertIn("Bible book plus a chapter or verse range",
                               cleanup.summary_validation_error(with_references("- " + bad)))
-        self.assertIsNotNone(cleanup.summary_validation_error(with_references("• James 1:27")))
-        self.assertIsNotNone(cleanup.summary_validation_error(with_references("James 1:27")))
-        self.assertIsNotNone(cleanup.summary_validation_error(with_references("- None noted.")))
+        self.assertEqual(cleanup.normalize_summary(with_references("• James 1:27")), with_references("- James 1:27"))
+        self.assertEqual(cleanup.normalize_summary(with_references("James 1:27")), with_references("- James 1:27"))
+        self.assertEqual(cleanup.normalize_summary(with_references("- None noted.")), with_references("None noted."))
         self.assertIsNone(cleanup.summary_validation_error(with_references("None noted.")))
         self.assertIn("one to 5 distinct Bible references", cleanup.summary_validation_error(with_references(
             "- Matthew 15:1\n- Romans 8\n- Luke 1\n- John 1\n- Acts 1\n- Esther 1"
@@ -207,6 +207,13 @@ class SummaryWorkflowTests(unittest.TestCase):
         transcript = f"We are reading Matthew 15:1–20 today. {AUTHORITY_QUOTE} {ACCEPTANCE_QUOTE}"
         client, sent = self.mock_client(lambda *_: completion(MATTHEW_RESPONSE))
         self.assertEqual(cleanup.summarize_transcript(transcript, client), MATTHEW_OVERVIEW)
+        self.assertEqual(len(sent), 1)
+
+    def test_john_reference_decoration_does_not_trigger_a_retry(self):
+        expected = with_references("- John 11:17–27\n- Romans 8:38–39")
+        reply = with_references("John 11:17-27\n2. **Romans 8:38–39**")
+        client, sent = self.mock_client(lambda *_: completion(reply))
+        self.assertEqual(cleanup.summarize_transcript("The passage is John 11.", client), expected)
         self.assertEqual(len(sent), 1)
 
     def test_chunk_consolidation_passes_quotations_to_full_transcript_verification(self):

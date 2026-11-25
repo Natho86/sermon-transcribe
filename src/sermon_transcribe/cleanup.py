@@ -10,7 +10,9 @@ from typing import Iterable, List
 from sermon_transcribe.ai import AIClient, CreditBalanceError, GenerationError, configure_ai_logging, estimate_tokens
 from sermon_transcribe.bible_references import MAX_REFERENCES, NO_REFERENCES, normalize_bible_references
 from sermon_transcribe.io_utils import ensure_dir, readable_path
-from sermon_transcribe.sermon_points import MAX_POINTS, NO_POINTS, QUOTE_SEPARATOR, sentences, verified_main_points, words
+from sermon_transcribe.sermon_points import (
+    MAX_POINTS, NO_POINTS, QUOTE_SEPARATOR, log_point_notes, sentences, verified_main_points, words,
+)
 
 
 DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
@@ -291,8 +293,9 @@ Summary requirements:
 - Do not repeat the main points unnecessarily.
 
 Main points:
-- Extract up to three main points explicitly stated by the preacher.
+- Extract up to {MAX_POINTS} main points explicitly stated by the preacher.
 - Look for announced sermon points, clearly identified headings and transitions between principal sections.
+- Look also for recaps and lists of parallel statements in a single sentence. Extract each complete point separately with its own exact quotation. Include complete qualifiers.
 - Preserve the preacher's original wording as closely as possible.
 - Minor punctuation changes and removal of conversational introductory phrases are permitted.
 - Where the preacher provides a heading and an associated statement, these may be combined using a colon.
@@ -357,7 +360,7 @@ def build_summary_chunk_prompt(text: str, *, section: tuple[int, int] | None = N
     position = f"Section {section[0]} of {section[1]}.\n\n" if section else ""
     return f"""Extract factual evidence for a brief sermon overview from this section of a longer sermon.
 
-{position}- Record explicitly announced points, clearly identified headings and transitions into principal sections in their original order.
+{position}- Record explicitly announced points, clearly identified headings, recaps and lists of parallel statements in their original order. Keep complete points and their qualifiers even when several appear in one sentence.
 - Copy the original wording and an exact supporting quotation for each point. Keep the heading and any qualifications in the quotation when relevant.
 - Briefly describe the subjects discussed in neutral language. Avoid condensing theological arguments into new statements.
 - Record explicit Bible references and direct biblical quotations that could identify significant passages.
@@ -394,7 +397,7 @@ def build_summary_merge_prompt(text: str) -> str:
     return f"""{summary_format_instructions()}Use the extraction notes below, which cover consecutive sections of the sermon in their original order.
 
 - Consider every section before describing the overall subject in one or two neutral sentences.
-- Select only explicitly announced or clearly headed sermon points. Preserve their original wording and order, and copy the supporting transcript quotations verbatim.
+- Select explicitly announced or clearly headed points, including in recaps and lists of parallel statements. Preserve their original wording and order, and copy the supporting transcript quotations verbatim.
 - Deduplicate repeated points and Bible references. If the notes provide no verifiable point, write "{NO_POINTS}"
 - Do not expand, interpret or invent claims from the notes.
 
@@ -402,7 +405,7 @@ Notes:
 {text.strip()}"""
 
 
-def normalize_summary(summary: str, *, transcript: str | None = None) -> str:
+def normalize_summary(summary: str, *, transcript: str | None = None, job_id=None) -> str:
     sections = re.fullmatch(
         r"Summary:[ \t]*\n(.+?)\n\s*Main points:[ \t]*\n(.+?)\n\s*Bible references:[ \t]*\n(.+)",
         summary.replace("\r\n", "\n").strip(),
@@ -419,20 +422,20 @@ def normalize_summary(summary: str, *, transcript: str | None = None) -> str:
     if QUOTE_SEPARATOR in paragraph:
         raise ValueError("Keep supporting quotations in the Main points section only.")
 
-    point_text = []
-    if points != NO_POINTS:
+    if transcript is not None:
+        point_text = verified_main_points(points, transcript, job_id=job_id)
+    elif points == NO_POINTS:
+        point_text = []
+    else:
         lines = [line.strip() for line in points.splitlines() if line.strip()]
         bullets = [line[1:].strip() for line in lines if re.fullmatch(r"-\s+\S.*", line)]
-        if transcript is not None:
-            point_text = verified_main_points(bullets, transcript)
-        else:
-            if len(bullets) != len(lines) or not 1 <= len(bullets) <= MAX_POINTS:
-                raise ValueError(f'Use up to {MAX_POINTS} hyphen bullets for main points, or write "{NO_POINTS}"')
-            if any(QUOTE_SEPARATOR in bullet for bullet in bullets):
-                raise ValueError("Remove the internal supporting quotations from published main points.")
-            if len({words(point) for point in bullets}) != len(bullets):
-                raise ValueError("Use distinct main points and remove repeated bullets.")
-            point_text = bullets
+        if len(bullets) != len(lines) or not 1 <= len(bullets) <= MAX_POINTS:
+            raise ValueError(f'Use up to {MAX_POINTS} hyphen bullets for main points, or write "{NO_POINTS}"')
+        if any(QUOTE_SEPARATOR in bullet for bullet in bullets):
+            raise ValueError("Remove the internal supporting quotations from published main points.")
+        if len({words(point) for point in bullets}) != len(bullets):
+            raise ValueError("Use distinct main points and remove repeated bullets.")
+        point_text = bullets
     formatted_points = "\n".join(f"- {point}" for point in point_text) if point_text else NO_POINTS
     normalized_references = normalize_bible_references(references)
     return f"Summary:\n{paragraph}\n\nMain points:\n{formatted_points}\n\nBible references:\n{normalized_references}"
@@ -494,7 +497,7 @@ def summarize_transcript(text, client, *, max_chars=None, max_tokens=None, tempe
         raise GenerationError("validation", "A sermon transcript is required for summarisation.")
 
     def published_summary(summary):
-        return normalize_summary(summary, transcript=text)
+        return normalize_summary(summary, transcript=text, job_id=client.job_id)
 
     def generate(prompt, task, normalize=None):
         return client.generate(prompt, task, normalize=normalize, max_tokens=max_tokens, temperature=temperature)
@@ -520,7 +523,9 @@ def summarize_transcript(text, client, *, max_chars=None, max_tokens=None, tempe
         def generate_chunk(chunk, section):
             prompt = build(chunk) if consolidate else build(chunk, section=section)
             try:
-                return generate(prompt, "summary_notes")
+                notes = generate(prompt, "summary_notes")
+                log_point_notes(notes, client.job_id, "consolidation" if consolidate else "extraction")
+                return notes
             except GenerationError as exc:
                 if exc.kind != "context" or len(chunk) < 500:
                     raise

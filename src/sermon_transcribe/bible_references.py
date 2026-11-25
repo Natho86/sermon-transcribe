@@ -26,6 +26,8 @@ CITATION = re.compile(
     rf"(?:\s*-\s*(?P<end>{NUMBER})(?:\s*:\s*(?P<end_verse>{NUMBER}))?)?"
 )
 REDUNDANT_VERSES = re.compile(r"(?:specifically |including )?(?:vv?\.|verses?)\s+(.+)", re.I)
+LIST_MARKER = re.compile(r"^(?:[-*•‣◦▪–—]|[0-9]+[.)])\s*")
+EMPHASIS = re.compile(r"\*\*([^*]+)\*\*|__([^_]+)__|\*([^*]+)\*|_([^_]+)_")
 
 
 @dataclass(frozen=True)
@@ -112,18 +114,19 @@ def merge_references(first: Reference, second: Reference) -> Reference | None:
     return Reference(first.book, earlier.start, end)
 
 
+def _reference_entry(line: str) -> str:
+    plain = EMPHASIS.sub(lambda match: next(part for part in match.groups() if part), line.strip())
+    return " ".join(LIST_MARKER.sub("", plain).split())
+
+
 def normalize_bible_references(section: str) -> str:
-    if section.strip() == NO_REFERENCES:
+    entries = [_reference_entry(line) for line in section.splitlines() if line.strip()]
+    if len(entries) == 1 and entries[0].casefold() in ("none noted", "none noted."):
         return NO_REFERENCES
 
     references = []
-    for line in section.splitlines():
-        if not line.strip():
-            continue
-        bullet = re.fullmatch(r"-\s+(\S.*)", line.strip())
-        if not bullet:
-            raise ValueError('Use one hyphen bullet per Bible reference, or write exactly "None noted."')
-        reference = parse_reference(bullet[1])
+    for entry in entries:
+        reference = parse_reference(entry)
         if reference is None:
             raise ValueError("Use a Bible book plus a chapter or verse range in each reference. Remove names and nonessential annotations.")
 
