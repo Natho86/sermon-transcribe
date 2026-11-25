@@ -10,7 +10,7 @@ from urllib.error import HTTPError
 
 from sermon_transcribe import ai, cleanup, settings
 
-SUMMARY = "Summary:\nHope sustains us.\n\nMain points:\n- Hope endures.\n\nBible references:\n- Psalm 18:2"
+SUMMARY = "Summary:\nThe preacher discusses hope.\n\nMain points:\nNone noted.\n\nBible references:\n- Psalm 18:2"
 TRANSCRIPT = " ".join(
     ["We turn to the Lord for strength when the storms arrive. This message invites the church to pray and trust in God's promises."] * 4
 )
@@ -70,10 +70,10 @@ class AITests(unittest.TestCase):
             self.assertNotIn(secret, logs)
 
     def test_format_retry_identifies_actual_word_count(self):
-        too_long = SUMMARY.replace("Hope sustains us.", "word " * 121)
+        too_long = SUMMARY.replace("The preacher discusses hope.", "word " * 41)
         client, sent = self.client(replies=[chat(too_long), chat(SUMMARY)])
         self.assertEqual(cleanup.summarize_transcript("A source.", client), SUMMARY)
-        self.assertIn("121 words", sent[1]["messages"][0]["content"])
+        self.assertIn("41 words", sent[1]["messages"][0]["content"])
         self.assertEqual(sent[0]["max_tokens"], sent[1]["max_tokens"])
         self.assertNotIn("reasoning", sent[0])
 

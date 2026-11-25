@@ -301,7 +301,9 @@ Transcript cleanup starts at temperature 0.1 and scales the output allowance wit
 
 The app prefers to summarise the complete transcript when it fits the reported context. With no context information, it uses a 16,000-character threshold. Larger inputs use ordered extraction notes, with a separate consolidation prompt if the notes still need to be shortened.
 
-Summaries use British English, one paragraph of up to 120 words, one to three main points and up to five Bible references. The app standardises citation formatting, combines consecutive verses and removes redundant entries. The model identifies passages from the sermon. Structural validation checks citation form.
+Summaries use British English and describe the sermon in one or two factual sentences of up to 40 words total. The app checks up to three proposed main points against supporting quotations from the saved transcript and omits points it cannot verify. The published file shows only the verified points or `None noted.`
+
+The model identifies up to five Bible references from the sermon. The app checks citation form, standardises formatting, combines consecutive verses and removes redundant entries.
 
 The app rejects truncated responses and retries with more room or reduced reasoning when supported. It saves a cleaned transcript only after every chunk passes validation. If summary generation alone fails, **Reprocess** defaults to retrying the unfinished summary from the saved transcript.
 

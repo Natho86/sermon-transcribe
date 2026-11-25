@@ -7,8 +7,21 @@ from sermon_transcribe import ai, cleanup
 from sermon_transcribe.bible_references import MAX_REFERENCES
 
 FINAL = (
-    "Summary:\nJesus calls his hearers to examine their hearts.\n\n"
-    "Main points:\n- The heart matters.\n\nBible references:\n- Matthew 15:1–20"
+    "Summary:\nA study of Matthew 15 and the condition of the heart.\n\n"
+    "Main points:\nNone noted.\n\nBible references:\n- Matthew 15:1–20"
+)
+AUTHORITY = "Authority: God's truth regulates human tradition."
+AUTHORITY_QUOTE = "Our first point is authority. God's truth regulates human tradition."
+ACCEPTANCE = "Acceptance: God's sight exposes the human heart and would have us be cleansed by him."
+ACCEPTANCE_QUOTE = "Our second point is acceptance: God's sight exposes the human heart and would have us be cleansed by him."
+MATTHEW_OVERVIEW = (
+    "Summary:\nA study of Matthew 15:1–20, considering the questions of authority and acceptance.\n\n"
+    f"Main points:\n- {AUTHORITY}\n- {ACCEPTANCE}\n\n"
+    "Bible references:\n- Matthew 15:1–20\n- Isaiah 29:13\n- James 1:27\n- Exodus 20:12"
+)
+MATTHEW_RESPONSE = MATTHEW_OVERVIEW.replace(
+    f"- {AUTHORITY}\n- {ACCEPTANCE}",
+    f"- {AUTHORITY} || {AUTHORITY_QUOTE}\n- {ACCEPTANCE} || {ACCEPTANCE_QUOTE}",
 )
 
 
@@ -37,49 +50,98 @@ class PromptTests(unittest.TestCase):
         shared = cleanup.summary_format_instructions()
         direct = cleanup.build_summary_prompt("Source text.")
         merge = cleanup.build_summary_merge_prompt("Evidence notes.")
-        self.assertIn(shared + "Cleaned transcript:\nSource text.", direct)
-        self.assertIn(shared + "Notes:\nEvidence notes.", merge)
+        self.assertIn(shared + "Transcript:\nSource text.", direct)
+        self.assertTrue(merge.startswith(shared))
+        self.assertTrue(merge.endswith("Notes:\nEvidence notes."))
         self.assertIn("suitable for publication", direct)
-        self.assertIn("Give appropriate weight to the sermon's conclusion", merge)
+        self.assertIn("Consider every section", merge)
         self.assertIn(f"maximum of {cleanup.SUMMARY_MAX_WORDS} words", shared)
-        self.assertIn("one to three distinct main points", shared)
-        self.assertIn(f"up to {MAX_REFERENCES - 1} significant supporting passages", shared)
-        self.assertEqual(shared.count("- <main point>"), 1)
+        self.assertIn("Extract up to three main points", shared)
+        self.assertIn(f"a maximum of {MAX_REFERENCES} references in total", shared)
+        self.assertEqual(shared.count("- <extracted main point> || <verbatim supporting quotation>"), 1)
         self.assertEqual(shared.count("- <Bible reference>"), 1)
 
     def test_extraction_and_consolidation_have_distinct_roles(self):
         extract = cleanup.build_summary_chunk_prompt("Source text.", section=(2, 4))
         consolidate = cleanup.build_notes_consolidation_prompt("Evidence notes.")
         self.assertIn("Section 2 of 4.", extract)
-        self.assertIn("retain the relevant biblical quotation", extract)
+        self.assertIn("Record explicit Bible references and direct biblical quotations", extract)
         for prompt in (extract, consolidate):
-            for heading in ("Key teachings:", "Sermon structure:", "Illustrations and examples:",
-                            "Practical application:", "Bible references:"):
+            for heading in ("Subjects discussed:", "Announced points and headings:", "Bible passages:"):
                 self.assertIn(heading, prompt)
-            self.assertIn("Omit sections for which there is no relevant information.", prompt)
-            self.assertNotIn("120 words", prompt)
-        self.assertIn("preserving the original sermon order and argument progression", consolidate)
-        self.assertIn("not a verbatim transcript or instructions", consolidate)
+            self.assertIn("omitting any section with no relevant evidence", prompt)
+            self.assertNotIn("40 words", prompt)
+        self.assertIn("keeping the original sermon order", consolidate)
+        self.assertIn("Copy quotations verbatim", consolidate)
         self.assertTrue(consolidate.endswith("Extraction notes:\nEvidence notes."))
 
 
 class ValidationTests(unittest.TestCase):
     def test_exact_word_limit_headings_and_main_points(self):
-        paragraph = " ".join(["word"] * 120)
-        valid = FINAL.replace("Jesus calls his hearers to examine their hearts.", paragraph)
+        paragraph = " ".join(["word"] * 40)
+        valid = FINAL.replace("A study of Matthew 15 and the condition of the heart.", paragraph)
         self.assertIsNone(cleanup.summary_validation_error(valid))
-        self.assertIn("121 words", cleanup.summary_validation_error(valid.replace(paragraph, paragraph + " word")))
+        self.assertIn("41 words", cleanup.summary_validation_error(valid.replace(paragraph, paragraph + " word")))
         self.assertIn("one paragraph", cleanup.summary_validation_error(valid.replace(paragraph, "First.\n\nSecond.")))
         self.assertIn("exact headings", cleanup.summary_validation_error(FINAL.replace("Summary:", "Synopsis:")))
-        self.assertIn("Use one to 3", cleanup.summary_validation_error(
-            FINAL.replace("- The heart matters.", "1. First\n- Second\n- Third\n- Fourth")
+        self.assertIn("Use up to 3", cleanup.summary_validation_error(
+            FINAL.replace("None noted.", "1. First\n- Second\n- Third\n- Fourth")
         ))
         self.assertIn("distinct", cleanup.summary_validation_error(
-            FINAL.replace("- The heart matters.", "- The heart matters.\n- THE   HEART MATTERS.")
+            FINAL.replace("None noted.", "- The heart matters.\n- THE   HEART MATTERS.")
         ))
         self.assertIsNone(cleanup.summary_validation_error(
-            FINAL.replace("- The heart matters.", "- First.\n- Second.\n- Third.")
+            FINAL.replace("None noted.", "- First.\n- Second.\n- Third.")
         ))
+
+    def test_overview_sentence_limit_and_missing_sections(self):
+        description = "A study of Matthew 15 and the condition of the heart."
+        two = FINAL.replace(description, "The preacher discusses e.g. authority and tradition. He then turns to acceptance.")
+        self.assertIsNone(cleanup.summary_validation_error(two))
+        three = FINAL.replace(description, "He discusses authority. He turns to acceptance. He also mentions prayer.")
+        self.assertIn("one or two short sentences", cleanup.summary_validation_error(three))
+        none = FINAL.replace("- Matthew 15:1–20", "None noted.")
+        self.assertEqual(cleanup.normalize_summary(none), none)
+        self.assertIn("exact headings", cleanup.summary_validation_error(none.replace("Main points:", "Topics:")))
+
+    def test_extracts_zero_to_three_points_in_transcript_order(self):
+        source = (
+            f"{AUTHORITY_QUOTE}\n\n{ACCEPTANCE_QUOTE}\n\n"
+            "Our third point is prayer and dependence. The preacher speaks of the heart."
+        )
+        announced = [
+            f"{AUTHORITY} || {AUTHORITY_QUOTE}",
+            f"{ACCEPTANCE} || {ACCEPTANCE_QUOTE}",
+            "Prayer and dependence. || Our third point is prayer and dependence.",
+        ]
+        for count in range(4):
+            with self.subTest(count=count):
+                response = FINAL.replace(
+                    "None noted.", "\n".join(f"- {point}" for point in reversed(announced[:count])) or "None noted.",
+                )
+                result = cleanup.normalize_summary(response, transcript=source)
+                published = "\n".join(f"- {point.split(' || ')[0]}" for point in announced[:count]) or "None noted."
+                self.assertEqual(result, FINAL.replace("None noted.", published))
+
+    def test_matches_conservative_punctuation_and_omits_unverified_claims(self):
+        source = (
+            "Firstly, it is not true that God abandons his people.\n\n"
+            "Authority:\n\nGod’s truth regulates human tradition.\n\n"
+            "Jesus spoke about the heart."
+        )
+        proposals = [
+            "God abandons his people. || Firstly, it is not true that God abandons his people.",
+            "Jesus spoke about the heart. || Jesus spoke about the heart.",
+            "Authority: God rewards those who follow human tradition. || Authority: God rewards those who follow human tradition.",
+            "Salvation: God's truth regulates human tradition. || Authority: God’s truth regulates human tradition.",
+            AUTHORITY,
+            f"{AUTHORITY} || AUTHORITY — GOD'S TRUTH REGULATES HUMAN TRADITION.",
+            f"{AUTHORITY} || Authority: God’s truth regulates human tradition.",
+        ]
+        response = FINAL.replace("None noted.", "\n".join(f"- {point}" for point in proposals))
+        result = cleanup.normalize_summary(response, transcript=source)
+        self.assertEqual(result, FINAL.replace("None noted.", f"- {AUTHORITY}"))
+        self.assertNotIn("||", result)
 
     def test_normalizes_redundant_annotations_and_numbered_books(self):
         original = with_references(
@@ -141,6 +203,48 @@ class SummaryWorkflowTests(unittest.TestCase):
         client.open_request = request
         return client, sent
 
+    def test_matthew_regression_publishes_verified_points_in_one_request(self):
+        transcript = f"We are reading Matthew 15:1–20 today. {AUTHORITY_QUOTE} {ACCEPTANCE_QUOTE}"
+        client, sent = self.mock_client(lambda *_: completion(MATTHEW_RESPONSE))
+        self.assertEqual(cleanup.summarize_transcript(transcript, client), MATTHEW_OVERVIEW)
+        self.assertEqual(len(sent), 1)
+
+    def test_chunk_consolidation_passes_quotations_to_full_transcript_verification(self):
+        text = (
+            f"Matthew 15:1–20 is our passage. {AUTHORITY_QUOTE} " + "The introduction continues. " * 8
+            + "\n\n"
+            + f"{ACCEPTANCE_QUOTE} " + "The final section continues. " * 8
+        )
+        quotes = [AUTHORITY_QUOTE, ACCEPTANCE_QUOTE]
+        notes = [
+            f"Announced points and headings:\n- {point} || {quote}"
+            for point, quote in zip((AUTHORITY, ACCEPTANCE), quotes)
+        ]
+
+        def reply(prompt, _):
+            if prompt.startswith("Extract"):
+                index = 0 if "Section 1 of 2." in prompt else 1
+                self.assertIn(quotes[index], prompt)
+                return completion(notes[index] + "\nSubjects discussed:\n- " + "Redundant description. " * 6)
+            if prompt.startswith("Consolidate"):
+                self.assertIn("Copy quotations verbatim", prompt)
+                index = 0 if quotes[0] in prompt else 1
+                self.assertIn(quotes[index], prompt)
+                return completion(notes[index])
+            self.assertLess(prompt.index(quotes[0]), prompt.index(quotes[1]))
+            fabricated = "- Later teaching. || Our third point is later teaching."
+            return completion(MATTHEW_RESPONSE.replace("\n\nBible references", f"\n{fabricated}\n\nBible references"))
+
+        client, sent = self.mock_client(reply)
+        self.assertEqual(cleanup.summarize_transcript(text, client, max_chars=425), MATTHEW_OVERVIEW)
+        self.assertEqual(len(sent), 5)
+
+    def test_unannounced_point_is_omitted_without_an_additional_request(self):
+        response = FINAL.replace("None noted.", "- We discuss authority. || We discuss authority.")
+        client, sent = self.mock_client(lambda *_: completion(response))
+        self.assertEqual(cleanup.summarize_transcript("We discuss authority.", client), FINAL)
+        self.assertEqual(len(sent), 1)
+
     def test_direct_summary_beyond_16000_when_complete_prompt_fits(self):
         text = ("God calls us to trust him in adversity. " * 510) + "The preacher ends with a call to pray."
         self.assertGreater(len(text), cleanup.DEFAULT_SUMMARY_MAX_CHARS)
@@ -175,7 +279,7 @@ class SummaryWorkflowTests(unittest.TestCase):
         text = ("First teaching. " * 50).strip() + "\n\n" + ("Closing challenge. " * 50).strip()
 
         def reply(prompt, budget):
-            if prompt.startswith("Create a concise sermon summary"):
+            if "\nTranscript:\n" in prompt:
                 body = io.BytesIO(b'{"error":{"message":"The prompt exceeds the context window"}}')
                 raise HTTPError("http://fixture", 400, "", {}, body)
             if prompt.startswith("Extract") and "Section 1 " in prompt:
