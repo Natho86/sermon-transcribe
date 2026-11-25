@@ -14,11 +14,11 @@ WORD = re.compile(r"[^\W_]+(?:'[^\W_]+)*")
 APOSTROPHES = str.maketrans("‘’", "''")
 ORDINAL = r"(?:first|second|third|fourth|fifth|next|final|last)"
 OUTLINE = re.compile(
-    rf"^[\"'“‘(\s]*(?:(?:and|now|so|that['’]s)\b[:,]?\s+)*"
+    rf"^[\"'“‘(\s]*(?:(?:and|but|now|so|that['’]s)\b[:,]?\s+)*"
     rf"(?:(?:firstly|secondly|thirdly|fourthly|fifthly|finally|first of all)\b\s*[,:]?\s*"
     rf"|(?:{ORDINAL}|(?:point|number) (?:one|two|three|four|five|[1-5]))\s*[,:]\s*"
     rf"|(?:(?:the|my|our)\s+)?{ORDINAL}(?:\s+(?:point|heading|question|thing|one))?"
-    rf"(?:\s+(?:is|will be|relates to)\b\s*[:,]?\s*|\s*[,:]\s*))",
+    rf"(?:\s+(?:(?:we|we['’]re|we are) (?:going to )?look at )?(?:is|will be|relates to)\b\s*[:,]?\s*|\s*[,:]\s*))",
     re.I,
 )
 ABBREVIATION = re.compile(r"\b(?:mr|mrs|ms|dr|rev|st|cf|v|vv|e\.g|i\.e)\.(?=\s)", re.I)
@@ -29,6 +29,12 @@ HEADING_LEAD_IN = re.compile(
 POINT_LEAD_IN = re.compile(r"^(?:is )?that\s+", re.I)
 HEADING_LINK = re.compile(r"^([^,]+),\s+which is that\s+(.+)$", re.I)
 LIST_MARKER = re.compile(r"^(?:[-*•–—]|[0-9]+[.)])\s+")
+FINAL_TRANSITION = re.compile(r"^(?:and |so )?that (?:just )?(?:kind of )?brings us to (?:a|the) final point:\s*", re.I)
+EMPHASIS_TRANSITION = re.compile(
+    r"^(?:you see,\s*)?what is being emphasi[sz]ed in this passage,?\s+first of all,?\s+is that\s+", re.I,
+)
+CONTRAST = re.compile(r"(?:;\s*(?=[\w'’]+\s+also\b)|,\s*and yet,?\s+at the same time,\s*)", re.I)
+RESTART = re.compile(r"^([\w'’]+\s+\w+) also\s*[—–]\s*and this is the main point of the passage\s*[—–]\s*(.+)$", re.I)
 
 
 def sentences(text: str) -> list[str]:
@@ -65,7 +71,12 @@ def _outline_points(transcript: str):
     parts = [" ".join(part.split()) for part in sentences(transcript)]
     for index, sentence in enumerate(parts):
         body = OUTLINE.sub("", sentence, count=1)
+        body = FINAL_TRANSITION.sub("", body, count=1)
+        body = EMPHASIS_TRANSITION.sub("", body, count=1)
         announced = body != sentence
+        if re.search(r",\s*(?:first|second|third) of all,\s*", body, re.I):
+            body = LEAD_IN.sub("", body)
+            announced = True
         heading, colon, statement = body.partition(":")
         labelled = (
             colon and (not statement or statement[:1].isspace())
@@ -83,6 +94,15 @@ def _outline_points(transcript: str):
             heading = HEADING_LEAD_IN.sub("", heading)
             if 1 <= len(words(heading).split()) <= 8:
                 yield words(f"{heading} {statement}"), (index, 0), words(body)
+        if announced and (restart := RESTART.fullmatch(body)) and words(restart[2]).split()[:2] == words(restart[1]).split():
+            point = words(restart[2])
+            yield point, (index, 0), point
+        for clause_index, match in enumerate(CONTRAST.finditer(body), 1):
+            point = words(body[match.end():])
+            if point:
+                # A complete contrasting clause can stand alone, but its
+                # quotation must retain the source contrast and qualifications.
+                yield point, (index, clause_index), words(body)
         is_heading = (announced and not colon and 1 <= len(words(body).split()) <= 8) or (labelled and not statement)
         if is_heading and index + 1 < len(parts):
             # Keep an announced heading and its adjacent statement together.
@@ -148,7 +168,8 @@ def verified_main_points(section: str, transcript: str, *, job_id=None) -> list[
         if f" {quote} " not in source:
             reasons["quotation_not_in_transcript"] += 1
         elif not key or not (
-            f" {key} " in f" {quote} " or any(f" {proof} " in f" {quote} " for _, proof in matches)
+            any(f" {proof} " in f" {quote} " for _, proof in matches)
+            if matches else f" {key} " in f" {quote} "
         ):
             reasons["point_not_in_quotation"] += 1
         elif position is None:

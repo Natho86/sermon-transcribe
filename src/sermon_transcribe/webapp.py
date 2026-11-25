@@ -477,7 +477,7 @@ def cleanup_transcript(
         if is_job_cancelled(job_id):
             return
         write_text(cleaned_path, apply_disclaimer(cleaned))
-        finish_job_summary(job_id, cleaned_path, client, cleaned)
+        finish_job_summary(job_id, cleaned_path, client, cleaned, source_kind="cleaned")
 
 
 def job_ai_client(job_id: str, provider_info: dict) -> AIClient:
@@ -497,7 +497,7 @@ def job_ai_client(job_id: str, provider_info: dict) -> AIClient:
 SUMMARY_CHECKPOINT = ".summary-pending"
 
 
-def finish_job_summary(job_id: str, text_path: Path, client: AIClient, transcript: str):
+def finish_job_summary(job_id: str, text_path: Path, client: AIClient, transcript: str, *, source_kind: str):
     checkpoint = text_path.with_name(SUMMARY_CHECKPOINT)
     write_text(checkpoint, text_path.name)
     with jobs_lock:
@@ -510,6 +510,7 @@ def finish_job_summary(job_id: str, text_path: Path, client: AIClient, transcrip
         transcript, client, progress=lambda index, count: emit_progress(
             job_id, "processing", 80 + (index * 5 // count), f"Summary chunk {index}/{count}",
         ),
+        source_name=text_path.name, source_kind=source_kind,
     )
     if is_job_cancelled(job_id):
         return
@@ -1448,7 +1449,8 @@ def process_existing_transcript(job_id: str, text_path: Path, provider_info: dic
         if summary_only and not is_job_cancelled(job_id):
             client = job_ai_client(job_id, provider_info)
             with client.report():
-                finish_job_summary(job_id, text_path, client, strip_disclaimer(text_path.read_text(encoding="utf-8")))
+                transcript = strip_disclaimer(text_path.read_text(encoding="utf-8"))
+                finish_job_summary(job_id, text_path, client, transcript, source_kind="checkpoint")
         elif not is_job_cancelled(job_id):
             base_name = text_path.stem
             if base_name.endswith("_timestamps"):
@@ -1742,7 +1744,7 @@ def process_folder_jobs(
                     raise RuntimeError("The saved transcript is empty")
                 client = job_ai_client(job_id, provider_info)
                 with client.report():
-                    finish_job_summary(job_id, text_path, client, transcript)
+                    finish_job_summary(job_id, text_path, client, transcript, source_kind="folder_transcript")
                 if is_job_cancelled(job_id):
                     emit_progress(job_id, "cancelled", 0, "Job cancelled by user")
                 else:

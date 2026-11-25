@@ -1,4 +1,6 @@
 import argparse
+import hashlib
+import logging
 import os
 import re
 import sys
@@ -23,6 +25,7 @@ DEFAULT_CLEANED_SUFFIX = ""
 DEFAULT_RAW_SUFFIX = "_raw"
 DEFAULT_SUMMARY_SUFFIX = "_summary"
 DEFAULT_SUMMARY_MAX_CHARS = 16000
+logger = logging.getLogger("sermon_transcribe.ai.source")
 SUMMARY_MAX_WORDS = 40
 DISCLAIMER_TEXT = (
     "Please note: This transcription and summary were created with the assistance of "
@@ -492,9 +495,16 @@ def clean_transcript(text, client, *, max_chars=8000, max_tokens=None, temperatu
         return "\n\n".join(cleaned)
 
 
-def summarize_transcript(text, client, *, max_chars=None, max_tokens=None, temperature=None, progress=None):
+def summarize_transcript(
+    text, client, *, max_chars=None, max_tokens=None, temperature=None, progress=None,
+    source_name=None, source_kind="provided",
+):
     if not text.strip():
         raise GenerationError("validation", "A sermon transcript is required for summarisation.")
+    logger.info(
+        "AI summary source job=%s kind=%s filename=%r chars=%d sha256=%s",
+        client.job_id, source_kind, source_name, len(text), hashlib.sha256(text.encode("utf-8")).hexdigest(),
+    )
 
     def published_summary(summary):
         return normalize_summary(summary, transcript=text, job_id=client.job_id)
@@ -624,7 +634,8 @@ def summary_output_path(input_path: Path, output_dir: Path, suffix: str, raw_suf
 
 def process_transcript_file(raw_path, output_path, summary_path, args, client):
     skip_existing = args.skip_existing and not args.reprocess
-    if output_path.exists() and skip_existing:
+    reuse_cleaned = output_path.exists() and skip_existing
+    if reuse_cleaned:
         existing_cleaned = load_text(output_path)
         cleaned = strip_disclaimer(existing_cleaned)
         if not existing_cleaned.strip().startswith(DISCLAIMER_TEXT):
@@ -655,6 +666,7 @@ def process_transcript_file(raw_path, output_path, summary_path, args, client):
     summary = summarize_transcript(
         cleaned, client, max_chars=args.summary_max_chars,
         max_tokens=args.summary_max_tokens, temperature=args.temperature,
+        source_name=output_path.name, source_kind="saved" if reuse_cleaned else "cleaned",
     )
     write_text(summary_path, apply_disclaimer(summary, SUMMARY_DISCLAIMER_TEXT))
     print(f"  Wrote {readable_path(summary_path)}", flush=True)

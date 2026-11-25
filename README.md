@@ -314,6 +314,8 @@ Run `docker compose logs -f audio-transcribe-web` on the Docker host to see **AI
 
 Look for **AI main points** to see how many points were generated, parsed, verified or rejected, with rejection counts by reason. **AI point notes** tracks proposals and supporting quotations through extraction and consolidation without printing their text.
 
+**AI summary source** records the source type, filename, character count and SHA-256 digest of the text used for generation and point verification.
+
 ### Anthropic API Key
 
 1. Sign up at [Anthropic Console](https://console.anthropic.com/)
