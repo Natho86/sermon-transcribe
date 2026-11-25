@@ -299,6 +299,10 @@ The active provider handles transcript cleanup and summaries, including folder j
 
 Transcript cleanup starts at temperature 0.1 and scales the output allowance with each chunk. Final summaries start at temperature 0.2 and 4,096 output tokens. Requests use the advertised context and output limits when available. OpenRouter requests use minimal reasoning for models that advertise reasoning support. Local servers use the existing **Thinking** setting.
 
+The app prefers to summarise the complete transcript when it fits the reported context. With no context information, it uses a 16,000-character threshold. Larger inputs use ordered extraction notes, with a separate consolidation prompt if the notes still need to be shortened.
+
+Summaries use British English, one paragraph of up to 120 words, one to three main points and up to five Bible references. The app standardises citation formatting, combines consecutive verses and removes redundant entries. The model identifies passages from the sermon. Structural validation checks citation form.
+
 The app rejects truncated responses and retries with more room or reduced reasoning when supported. It saves a cleaned transcript only after every chunk passes validation. If summary generation alone fails, **Reprocess** defaults to retrying the unfinished summary from the saved transcript.
 
 Run `docker compose logs -f audio-transcribe-web` on the Docker host to see **AI request** and per-stage totals. The logs include finish reasons, retries, duration, and token usage or cost when the provider reports them. The failed job's message is also shown in the dashboard.

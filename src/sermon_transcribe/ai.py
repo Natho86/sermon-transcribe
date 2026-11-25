@@ -20,6 +20,7 @@ OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
 MAX_OUTPUT_TOKENS = 16384
 MAX_ATTEMPTS = 4
+# Reserve room for chat framing and token-estimation error.
 CONTEXT_HEADROOM = 256
 MAX_RETRY_DELAY = 60
 logger = logging.getLogger(__name__)
@@ -307,6 +308,18 @@ class AIClient:
             configured = min(configured, self.limits.output * 2)
         return configured
 
+    def _output_cap(self, max_tokens):
+        return min(self.limits.output or MAX_OUTPUT_TOKENS, max_tokens or MAX_OUTPUT_TOKENS)
+
+    def summary_input_allowance(self, task, max_tokens=None):
+        context = self.limits.context
+        if context is None:
+            return None
+        budget = max_tokens or PROFILES[task][1]
+        # Small context windows still need room for the instructions and source.
+        reserve = min(budget, self._output_cap(max_tokens), context // 2)
+        return context - reserve - CONTEXT_HEADROOM
+
     def _parameters(self, temperature):
         parameters = {"temperature": temperature}
         if self.provider == "openrouter" and self.limits.parameters:
@@ -349,7 +362,7 @@ class AIClient:
             return result, _api_error(self.service, error.get("code"), error, headers, parameters)
         return result, None
 
-    def generate(self, prompt, task, *, source=None, validate=None, max_tokens=None, temperature=None):
+    def generate(self, prompt, task, *, source=None, validate=None, normalize=None, max_tokens=None, temperature=None):
         profile_temp, profile_budget = PROFILES[task]
         # Punctuation, formatting and limited reasoning can expand the input.
         min_cleanup = estimate_tokens(source or "") if task == "cleanup" else 0
@@ -362,7 +375,7 @@ class AIClient:
             if self.cancelled and self.cancelled():
                 raise GenerationError("cancelled", "Job cancelled by user.")
             request_text = correction + prompt
-            limit = min(self.limits.output or MAX_OUTPUT_TOKENS, max_tokens or MAX_OUTPUT_TOKENS)
+            limit = self._output_cap(max_tokens)
             if self.limits.context is not None:
                 limit = min(limit, self.limits.context - estimate_tokens(request_text) - CONTEXT_HEADROOM)
             if limit < 1 or (max_tokens is None and limit < max(128, min_cleanup)):
@@ -377,9 +390,13 @@ class AIClient:
             if failure is None:
                 try:
                     text = _visible_text(content, finish, native, metrics, effective_budget)
+                    if normalize:
+                        text = normalize(text)
                     issue = validate(text) if validate else None
                     if issue:
                         failure = GenerationError("validation", issue)
+                except ValueError as exc:
+                    failure = GenerationError("validation", str(exc))
                 except GenerationError as exc:
                     failure = exc
             logger.info(
