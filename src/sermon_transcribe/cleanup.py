@@ -1,25 +1,16 @@
 import argparse
-import json
 import os
 import re
 import sys
-import time
-import urllib.error
-import urllib.request
-from functools import partial
+from collections import Counter
 from pathlib import Path
-from typing import Callable, Iterable, List, Optional
+from tempfile import TemporaryDirectory
+from typing import Iterable, List
 
+from sermon_transcribe.ai import AIClient, CreditBalanceError, GenerationError, configure_ai_logging
 from sermon_transcribe.io_utils import ensure_dir, readable_path
-from sermon_transcribe.settings import COMPATIBLE_PROVIDER, compatible_base_url, compatible_opener
 
 
-ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
-# Keep old name as alias so CLI code still works
-API_URL = ANTHROPIC_API_URL
-ANTHROPIC_VERSION = "2023-06-01"
 DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
 DEFAULT_OPENROUTER_MODEL = "anthropic/claude-sonnet-4-5"
 DEFAULT_OPENAI_MODEL = "gpt-4o"
@@ -28,7 +19,6 @@ DEFAULT_CLEANED_SUFFIX = ""
 DEFAULT_RAW_SUFFIX = "_raw"
 DEFAULT_SUMMARY_SUFFIX = "_summary"
 DEFAULT_SUMMARY_MAX_CHARS = 16000
-DEFAULT_SUMMARY_MAX_TOKENS = 600
 SUMMARY_MAX_WORDS = 120
 SUMMARY_MAX_POINTS = 3
 DISCLAIMER_TEXT = (
@@ -39,15 +29,12 @@ DISCLAIMER_TEXT = (
     "For the most accurate representation of the message, we recommend listening to the "
     "original audio recording."
 )
-SUMMARY_DISCLAIMER_TEXT = (
+SUMMARY_DISCLAIMER_TEXT = "Please note: This summary was generated with AI. We welcome any feedback"
+LEGACY_SUMMARY_DISCLAIMER_TEXT = (
     "Please note: This summary text was created with the assistance of artificial "
     "intelligence technology and may contain occasional errors or inaccuracies. "
     "If you notice anything that doesn't seem quite right, please feel free to let us know."
 )
-
-
-class CreditBalanceError(RuntimeError):
-    pass
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -99,8 +86,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-tokens",
         type=int,
-        default=1200,
-        help="Max tokens per cleanup call (default: 1200).",
+        help="Override the automatic output limit for each cleanup call.",
     )
     parser.add_argument(
         "--max-chars",
@@ -117,14 +103,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--summary-max-tokens",
         type=int,
-        default=DEFAULT_SUMMARY_MAX_TOKENS,
-        help=f"Max tokens per summary call (default: {DEFAULT_SUMMARY_MAX_TOKENS}).",
+        help="Override the automatic output limit for each summary call.",
     )
     parser.add_argument(
         "--temperature",
         type=float,
-        default=0.1,
-        help="Sampling temperature (default: 0.1).",
+        help="Override the task-specific sampling temperature.",
     )
     parser.add_argument(
         "--timeout",
@@ -255,7 +239,18 @@ def split_long_paragraph(paragraph: str, max_chars: int) -> List[str]:
 
 
 def hard_wrap(text: str, max_chars: int) -> List[str]:
-    return [text[idx : idx + max_chars] for idx in range(0, len(text), max_chars)]
+    chunks = []
+    while len(text) > max_chars:
+        limit = max_chars
+        for index in range(max_chars, max_chars // 2, -1):
+            if text[index].isspace():
+                limit = index
+                break
+        chunks.append(text[:limit].rstrip())
+        text = text[limit:].lstrip()
+    if text:
+        chunks.append(text)
+    return chunks
 
 
 def build_prompt(chunk: str) -> str:
@@ -285,8 +280,10 @@ def summary_format_instructions() -> str:
         "Bible references:\n"
         "- reference 1\n"
         "- reference 2\n\n"
-        "Only include references explicitly mentioned. If none are mentioned, write "
-        "'None noted.' Return only the formatted summary.\n\n"
+        "Preserve the preacher's central message and theological distinctions. Retain important "
+        "illustrations, biblical parallels and practical applications where they support that message.\n"
+        "List only scripture references explicitly mentioned in the source. A person's name is "
+        "not a reference. If none were mentioned, write 'None noted.' Return only the formatted summary.\n\n"
     )
 
 
@@ -300,8 +297,9 @@ def build_summary_prompt(text: str) -> str:
 
 def build_summary_chunk_prompt(text: str) -> str:
     return (
-        "From the cleaned transcript chunk below, extract the key ideas and any Bible "
-        "references. Keep the output short and factual.\n"
+        "From the text below, extract the key ideas and any Bible "
+        "references. Keep the output short and factual. Preserve important theological "
+        "distinctions, illustrations, and applications. List only references in the source.\n"
         "Format:\n"
         "Key ideas:\n"
         "- ...\n"
@@ -319,283 +317,115 @@ def build_summary_merge_prompt(text: str) -> str:
     )
 
 
-def summary_matches_format(summary: str) -> bool:
+def summary_validation_error(summary: str) -> str | None:
     sections = re.fullmatch(
         r"Summary:[ \t]*\n(.+?)\n\s*Main points:[ \t]*\n(.+?)\n\s*Bible references:[ \t]*\n(.+)",
         summary.replace("\r\n", "\n").strip(),
         flags=re.DOTALL | re.IGNORECASE,
     )
     if not sections:
-        return False
-
+        return "Use the exact headings Summary, Main points, and Bible references, with content under each."
     paragraph, points, references = sections.groups()
+    count = len(paragraph.split())
+    if not 0 < count <= SUMMARY_MAX_WORDS:
+        return f"The summary paragraph has {count} words. Use 1 to {SUMMARY_MAX_WORDS} words."
+    if re.search(r"\n\s*\n", paragraph.strip()):
+        return "Write the summary as one paragraph."
     point_lines = [line.strip() for line in points.splitlines() if line.strip()]
-    return (
-        0 < len(paragraph.split()) <= SUMMARY_MAX_WORDS
-        and not re.search(r"\n\s*\n", paragraph.strip())
-        and 1 <= len(point_lines) <= SUMMARY_MAX_POINTS
-        and all(re.match(r"-\s+\S", line) for line in point_lines)
-        and bool(references.strip())
-    )
+    if not 1 <= len(point_lines) <= SUMMARY_MAX_POINTS or not all(re.match(r"-\s+\S", line) for line in point_lines):
+        return f"Use one to {SUMMARY_MAX_POINTS} main points with one hyphen bullet per line."
+    if not references.strip():
+        return "Give the scripture references from the source or write 'None noted.'"
+    return None
 
 
-def generate_final_summary(prompt: str, generate: Callable[[str], str]) -> str:
-    summary = generate(prompt)
-    if summary_matches_format(summary):
-        return summary
-
-    summary = generate(
-        "The previous response did not meet the required length or format. "
-        "Check the word count and bullet count and use the exact headings shown below.\n\n"
-        + prompt
-    )
-    if not summary_matches_format(summary):
-        raise RuntimeError(
-            f"The AI summary must contain one paragraph of at most {SUMMARY_MAX_WORDS} words, "
-            f"one to {SUMMARY_MAX_POINTS} main points, and a Bible references section."
-        )
-    return summary
+def summary_matches_format(summary: str) -> bool:
+    return summary_validation_error(summary) is None
 
 
-def call_claude(
-    prompt: str,
-    api_key: str,
-    model: str,
-    max_tokens: int,
-    temperature: float,
-    timeout: int,
-    max_retries: int = 3,
-) -> str:
-    payload = {
-        "model": model,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
-    }
-    data = json.dumps(payload).encode("utf-8")
-    headers = {
-        "content-type": "application/json",
-        "x-api-key": api_key,
-        "anthropic-version": ANTHROPIC_VERSION,
-    }
+def cleanup_validation_error(source: str, cleaned: str) -> str | None:
+    source_length = len(re.sub(r"\s+", "", source))
+    cleaned_length = len(re.sub(r"\s+", "", cleaned))
+    if source_length >= 80 and cleaned_length < source_length * 0.8:
+        return "The cleaned text is substantially shorter than its source. Retain the full transcript in order."
+    source_words = Counter(re.findall(r"[^\W_]+", source.casefold()))
+    count = sum(source_words.values())
+    if count >= 20:
+        cleaned_words = Counter(re.findall(r"[^\W_]+", cleaned.casefold()))
+        if sum((source_words & cleaned_words).values()) < count * 0.7:
+            return "The cleanup replaced too much of the original wording. Limit changes to corrections and formatting."
+    return None
 
-    last_error: Optional[Exception] = None
-    for attempt in range(1, max_retries + 1):
-        request = urllib.request.Request(API_URL, data=data, headers=headers, method="POST")
+
+def clean_transcript(text, client, *, max_chars=8000, max_tokens=None, temperature=None, progress=None):
+    def clean_chunk(chunk, splits=0):
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                body = response.read().decode("utf-8")
-                parsed = json.loads(body)
-                return extract_text(parsed)
-        except urllib.error.HTTPError as exc:
-            last_error = exc
-            if exc.code in {429, 500, 502, 503, 504} and attempt < max_retries:
-                time.sleep(2**attempt)
-                continue
-            error_body = exc.read().decode("utf-8") if exc.fp else str(exc)
-            if exc.code == 400 and "credit balance is too low" in error_body.lower():
-                raise CreditBalanceError(
-                    "Anthropic API credits are exhausted. Please top up and retry."
-                ) from exc
-            if exc.code == 404:
-                raise RuntimeError(
-                    "Anthropic API returned 404. The model name may be invalid; "
-                    "set a valid model with --model."
-                ) from exc
-            raise RuntimeError(f"Anthropic API error {exc.code}: {error_body}") from exc
-        except urllib.error.URLError as exc:
-            last_error = exc
-            if attempt < max_retries:
-                time.sleep(2**attempt)
-                continue
-            raise RuntimeError(f"Anthropic API connection error: {exc}") from exc
+            return client.generate(
+                build_prompt(chunk), "cleanup", source=chunk,
+                validate=lambda cleaned: cleanup_validation_error(chunk, cleaned),
+                max_tokens=max_tokens, temperature=temperature,
+            )
+        except GenerationError as exc:
+            if exc.kind not in ("context", "length") or splits >= 2 or len(chunk) < 1000:
+                raise
+            return "\n\n".join(
+                clean_chunk(part, splits + 1) for part in split_into_chunks(chunk, len(chunk) // 2)
+            )
 
-    if last_error:
-        raise RuntimeError(f"Anthropic API request failed: {last_error}") from last_error
-    raise RuntimeError("Anthropic API request failed with unknown error.")
+    with client.report("cleanup"):
+        chunks = split_into_chunks(text, client.chunk_chars(max_chars, cleanup=True))
+        cleaned = []
+        for index, chunk in enumerate(chunks, 1):
+            if progress:
+                progress(index, len(chunks))
+            cleaned.append(clean_chunk(chunk))
+        return "\n\n".join(cleaned)
 
 
-def call_openrouter(
-    prompt: str,
-    api_key: str,
-    model: str,
-    max_tokens: int,
-    temperature: float,
-    timeout: int,
-    max_retries: int = 3,
-) -> str:
-    """Call OpenRouter's OpenAI-compatible chat completions endpoint."""
-    payload = {
-        "model": model,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "messages": [{"role": "user", "content": prompt}],
-    }
-    data = json.dumps(payload).encode("utf-8")
-    headers = {
-        "content-type": "application/json",
-        "Authorization": f"Bearer {api_key}",
-        "HTTP-Referer": "https://github.com/sermon-transcribe",
-        "X-Title": "Sermon Transcribe",
-    }
+def summarize_transcript(
+    text, client, *, max_chars=DEFAULT_SUMMARY_MAX_CHARS, max_tokens=None, temperature=None, progress=None,
+):
+    def generate(prompt, task, validate=None):
+        return client.generate(prompt, task, validate=validate, max_tokens=max_tokens, temperature=temperature)
 
-    last_error: Optional[Exception] = None
-    for attempt in range(1, max_retries + 1):
-        req = urllib.request.Request(OPENROUTER_API_URL, data=data, headers=headers, method="POST")
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as response:
-                body = response.read().decode("utf-8")
-                parsed = json.loads(body)
-                # OpenAI-compatible response format
-                choices = parsed.get("choices", [])
-                if not choices:
-                    raise RuntimeError(f"OpenRouter returned no choices: {body[:200]}")
-                return choices[0].get("message", {}).get("content", "").strip()
-        except urllib.error.HTTPError as exc:
-            last_error = exc
-            if exc.code in {429, 500, 502, 503, 504} and attempt < max_retries:
-                time.sleep(2**attempt)
-                continue
-            error_body = exc.read().decode("utf-8") if exc.fp else str(exc)
-            if exc.code in {401, 403}:
-                raise RuntimeError("OpenRouter API key is invalid or unauthorized.") from exc
-            raise RuntimeError(f"OpenRouter API error {exc.code}: {error_body}") from exc
-        except urllib.error.URLError as exc:
-            last_error = exc
-            if attempt < max_retries:
-                time.sleep(2**attempt)
-                continue
-            raise RuntimeError(f"OpenRouter connection error: {exc}") from exc
+    def extract_notes(text, chunk_size):
+        notes = []
+        chunks = split_into_chunks(text, chunk_size)
+        for index, chunk in enumerate(chunks, 1):
+            if progress:
+                progress(index, len(chunks))
+            try:
+                notes.append(generate(build_summary_chunk_prompt(chunk), "summary_notes"))
+            except GenerationError as exc:
+                if exc.kind != "context" or len(chunk) < 500:
+                    raise
+                notes.append(extract_notes(chunk, len(chunk) // 2))
+        return "\n\n".join(notes)
 
-    if last_error:
-        raise RuntimeError(f"OpenRouter request failed: {last_error}") from last_error
-    raise RuntimeError("OpenRouter request failed with unknown error.")
+    with client.report("summary"):
+        chunk_size = client.chunk_chars(max_chars)
+        if len(text) <= chunk_size:
+            try:
+                return generate(build_summary_prompt(text), "summary", summary_validation_error)
+            except GenerationError as exc:
+                if exc.kind != "context" or len(text) < 500:
+                    raise
+                chunk_size = len(text) // 2
 
-
-def call_openai(
-    prompt: str,
-    api_key: str,
-    model: str,
-    max_tokens: int,
-    temperature: float,
-    timeout: int,
-    max_retries: int = 3,
-    *,
-    base_url: Optional[str] = None,
-    enable_thinking: Optional[bool] = None,
-) -> str:
-    """Call OpenAI or a compatible chat completions endpoint."""
-    if base_url is None:
-        url, open_request, service = OPENAI_API_URL, urllib.request.urlopen, "OpenAI"
-    else:
-        url = f"{compatible_base_url(base_url)}/chat/completions"
-        open_request, service = compatible_opener.open, "OpenAI-compatible server"
-    payload = {
-        "model": model,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "messages": [{"role": "user", "content": prompt}],
-    }
-    if base_url is not None and enable_thinking is not None:
-        payload["chat_template_kwargs"] = {"enable_thinking": enable_thinking}
-    data = json.dumps(payload).encode("utf-8")
-    headers = {"content-type": "application/json"}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-
-    last_error: Optional[Exception] = None
-    for attempt in range(1, max_retries + 1):
-        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-        try:
-            with open_request(req, timeout=timeout) as response:
-                body = response.read().decode("utf-8")
-                parsed = json.loads(body)
-                choices = parsed.get("choices", [])
-                if not choices:
-                    raise RuntimeError(f"{service} returned no choices")
-                content = choices[0].get("message", {}).get("content")
-                if not isinstance(content, str) or not content.strip():
-                    raise RuntimeError(f"{service} returned no message text")
-                return content.strip()
-        except urllib.error.HTTPError as exc:
-            last_error = exc
-            if exc.code in {429, 500, 502, 503, 504} and attempt < max_retries:
-                time.sleep(2**attempt)
-                continue
-            error_body = exc.read().decode("utf-8") if exc.fp else str(exc)
-            if exc.code in {401, 403}:
-                raise RuntimeError(f"{service} API key is missing or invalid.") from exc
-            raise RuntimeError(f"{service} API error {exc.code}: {error_body}") from exc
-        except urllib.error.URLError as exc:
-            last_error = exc
-            if attempt < max_retries:
-                time.sleep(2**attempt)
-                continue
-            raise RuntimeError(f"{service} connection error: {exc}") from exc
-
-    if last_error:
-        raise RuntimeError(f"{service} request failed: {last_error}") from last_error
-    raise RuntimeError(f"{service} request failed with unknown error.")
-
-
-def call_llm(
-    prompt: str,
-    api_key: str,
-    model: str,
-    max_tokens: int,
-    temperature: float,
-    timeout: int,
-    provider: str = "anthropic",
-    max_retries: int = 3,
-    *,
-    base_url: Optional[str] = None,
-    enable_thinking: Optional[bool] = None,
-) -> str:
-    """Dispatch an LLM call to the appropriate provider."""
-    if provider == "openrouter":
-        return call_openrouter(
-            prompt=prompt,
-            api_key=api_key,
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            timeout=timeout,
-            max_retries=max_retries,
-        )
-    if provider in ("openai", COMPATIBLE_PROVIDER):
-        if provider == COMPATIBLE_PROVIDER and not base_url:
-            raise ValueError("An OpenAI-compatible server base URL is required")
-        return call_openai(
-            prompt=prompt,
-            api_key=api_key,
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            timeout=timeout,
-            max_retries=max_retries,
-            base_url=base_url if provider == COMPATIBLE_PROVIDER else None,
-            enable_thinking=enable_thinking if provider == COMPATIBLE_PROVIDER else None,
-        )
-    return call_claude(
-        prompt=prompt,
-        api_key=api_key,
-        model=model,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        timeout=timeout,
-        max_retries=max_retries,
-    )
-
-
-def extract_text(payload: dict) -> str:
-    content = payload.get("content", [])
-    parts = []
-    for item in content:
-        if isinstance(item, dict) and item.get("type") == "text":
-            text = item.get("text", "")
-            if text:
-                parts.append(text)
-    return "\n".join(parts).strip()
+        notes = extract_notes(text, chunk_size)
+        for _ in range(4):
+            if len(notes) <= chunk_size:
+                try:
+                    return generate(build_summary_merge_prompt(notes), "summary", summary_validation_error)
+                except GenerationError as exc:
+                    if exc.kind != "context" or len(notes) < 500:
+                        raise
+                    chunk_size = len(notes) // 2
+            reduced = extract_notes(notes, chunk_size)
+            if len(reduced) >= len(notes):
+                break
+            notes = reduced
+        raise GenerationError("context", "The summary notes could not fit the model's context window.")
 
 
 def load_text(path: Path) -> str:
@@ -603,7 +433,10 @@ def load_text(path: Path) -> str:
 
 
 def write_text(path: Path, content: str) -> None:
-    path.write_text(content, encoding="utf-8")
+    with TemporaryDirectory(dir=path.parent) as directory:
+        staged = Path(directory) / path.name
+        staged.write_text(content, encoding="utf-8")
+        staged.replace(path)
 
 
 def apply_disclaimer(text: str, disclaimer: str = DISCLAIMER_TEXT) -> str:
@@ -615,9 +448,9 @@ def apply_disclaimer(text: str, disclaimer: str = DISCLAIMER_TEXT) -> str:
 
 def strip_disclaimer(text: str) -> str:
     cleaned = text.strip()
-    if cleaned.startswith(DISCLAIMER_TEXT):
-        remainder = cleaned[len(DISCLAIMER_TEXT) :]
-        return remainder.lstrip("\n").lstrip()
+    for disclaimer in (DISCLAIMER_TEXT, SUMMARY_DISCLAIMER_TEXT, LEGACY_SUMMARY_DISCLAIMER_TEXT):
+        if cleaned.startswith(disclaimer):
+            return cleaned[len(disclaimer) :].lstrip()
     return cleaned
 
 
@@ -637,40 +470,51 @@ def summary_output_path(input_path: Path, output_dir: Path, suffix: str, raw_suf
     return output_dir / f"{stem}{suffix}.txt"
 
 
-def summarize_transcript(
-    cleaned_text: str,
-    api_key: str,
-    model: str,
-    max_tokens: int,
-    temperature: float,
-    timeout: int,
-    max_chars: int,
-) -> str:
-    generate = partial(
-        call_claude,
-        api_key=api_key,
-        model=model,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        timeout=timeout,
+def process_transcript_file(raw_path, output_path, summary_path, args, client):
+    skip_existing = args.skip_existing and not args.reprocess
+    if output_path.exists() and skip_existing:
+        existing_cleaned = load_text(output_path)
+        cleaned = strip_disclaimer(existing_cleaned)
+        if not existing_cleaned.strip().startswith(DISCLAIMER_TEXT):
+            write_text(output_path, apply_disclaimer(cleaned))
+    else:
+        text = strip_disclaimer(load_text(raw_path))
+        if not text:
+            print("  Skipping empty file.", flush=True)
+            return
+        cleaned = clean_transcript(
+            text, client, max_chars=args.max_chars, max_tokens=args.max_tokens, temperature=args.temperature,
+        )
+        write_text(output_path, apply_disclaimer(cleaned))
+        print(f"  Wrote {readable_path(output_path)}", flush=True)
+
+    if not cleaned:
+        print("  Skipping summary for empty transcript.", flush=True)
+        return
+    if summary_path.exists() and skip_existing:
+        existing_summary = load_text(summary_path)
+        if not existing_summary.strip().startswith(SUMMARY_DISCLAIMER_TEXT):
+            write_text(summary_path, apply_disclaimer(strip_disclaimer(existing_summary), SUMMARY_DISCLAIMER_TEXT))
+            print("  Updated summary disclaimer.", flush=True)
+        else:
+            print(f"  Skipping existing {readable_path(summary_path)}", flush=True)
+        return
+
+    summary = summarize_transcript(
+        cleaned, client, max_chars=args.summary_max_chars,
+        max_tokens=args.summary_max_tokens, temperature=args.temperature,
     )
-    if len(cleaned_text) <= max_chars:
-        return generate_final_summary(build_summary_prompt(cleaned_text), generate)
-
-    chunks = split_into_chunks(cleaned_text, max_chars)
-    chunk_notes = []
-    for chunk_idx, chunk in enumerate(chunks, start=1):
-        print(f"  Summary chunk {chunk_idx}/{len(chunks)}", flush=True)
-        notes = generate(build_summary_chunk_prompt(chunk))
-        chunk_notes.append(notes.strip())
-
-    combined_notes = "\n\n".join(note for note in chunk_notes if note)
-    return generate_final_summary(build_summary_merge_prompt(combined_notes), generate)
+    write_text(summary_path, apply_disclaimer(summary, SUMMARY_DISCLAIMER_TEXT))
+    print(f"  Wrote {readable_path(summary_path)}", flush=True)
 
 
 def main() -> None:
+    configure_ai_logging()
     parser = build_parser()
     args = parser.parse_args()
+    for name in ("max_tokens", "summary_max_tokens", "max_chars", "summary_max_chars"):
+        if (value := getattr(args, name)) is not None and value < 1:
+            parser.error(f"--{name.replace('_', '-')} must be positive")
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -695,6 +539,7 @@ def main() -> None:
 
     failures = 0
     for idx, file_path in enumerate(files, start=1):
+        client = AIClient("anthropic", args.model, api_key, job_id=file_path.name, timeout=args.timeout)
         target_dir = output_dir if output_dir else file_path.parent
         ensure_dir(target_dir)
         raw_path = file_path
@@ -709,87 +554,16 @@ def main() -> None:
 
         output_path = cleaned_output_path(raw_path, target_dir, args.suffix, args.raw_suffix)
         summary_path = summary_output_path(raw_path, target_dir, args.summary_suffix, args.raw_suffix)
-        has_cleaned = output_path.exists()
-        has_summary = summary_path.exists()
-        should_skip_cleaned = has_cleaned and args.skip_existing and not args.reprocess
-        should_skip_summary = has_summary and args.skip_existing and not args.reprocess
-
         print(f"[{idx}/{len(files)}] Cleaning {readable_path(raw_path)}", flush=True)
         try:
-            if should_skip_cleaned:
-                existing_cleaned = load_text(output_path)
-                cleaned_text = strip_disclaimer(existing_cleaned)
-                if not existing_cleaned.strip().startswith(DISCLAIMER_TEXT):
-                    write_text(output_path, apply_disclaimer(existing_cleaned))
-                    print("  Added disclaimer to cleaned transcript.", flush=True)
-            else:
-                text = load_text(raw_path).strip()
-                if not text:
-                    print("  Skipping empty file.", flush=True)
-                    continue
-
-                chunks = split_into_chunks(text, args.max_chars)
-                cleaned_chunks = []
-                for chunk_idx, chunk in enumerate(chunks, start=1):
-                    if len(chunks) > 1:
-                        print(f"  Chunk {chunk_idx}/{len(chunks)}", flush=True)
-                    prompt = build_prompt(chunk)
-                    cleaned = call_claude(
-                        prompt=prompt,
-                        api_key=api_key,
-                        model=args.model,
-                        max_tokens=args.max_tokens,
-                        temperature=args.temperature,
-                        timeout=args.timeout,
-                    )
-                    cleaned_chunks.append(cleaned.strip())
-
-                cleaned_text = "\n\n".join(chunk for chunk in cleaned_chunks if chunk)
-                write_text(output_path, apply_disclaimer(cleaned_text))
-                print(f"  Wrote {readable_path(output_path)}", flush=True)
+            with client.report():
+                process_transcript_file(raw_path, output_path, summary_path, args, client)
         except CreditBalanceError as exc:
-            print(f"  Cleanup failed: {exc}", file=sys.stderr)
+            print(f"AI processing failed: {exc}", file=sys.stderr)
             sys.exit(3)
         except RuntimeError as exc:
             failures += 1
-            print(f"  Cleanup failed: {exc}", file=sys.stderr)
-            continue
-
-        if not cleaned_text.strip():
-            print("  Skipping summary for empty transcript.", flush=True)
-            continue
-
-        if should_skip_summary:
-            existing_summary = load_text(summary_path)
-            if not existing_summary.strip().startswith(SUMMARY_DISCLAIMER_TEXT):
-                write_text(
-                    summary_path,
-                    apply_disclaimer(strip_disclaimer(existing_summary), SUMMARY_DISCLAIMER_TEXT),
-                )
-                print("  Updated summary disclaimer.", flush=True)
-            else:
-                print(f"  Skipping existing {readable_path(summary_path)}", flush=True)
-            continue
-
-        try:
-            summary = summarize_transcript(
-                cleaned_text=cleaned_text,
-                api_key=api_key,
-                model=args.model,
-                max_tokens=args.summary_max_tokens,
-                temperature=args.temperature,
-                timeout=args.timeout,
-                max_chars=args.summary_max_chars,
-            )
-            write_text(summary_path, apply_disclaimer(summary, SUMMARY_DISCLAIMER_TEXT))
-            print(f"  Wrote {readable_path(summary_path)}", flush=True)
-        except CreditBalanceError as exc:
-            print(f"  Summary failed: {exc}", file=sys.stderr)
-            sys.exit(3)
-        except RuntimeError as exc:
-            failures += 1
-            print(f"  Summary failed: {exc}", file=sys.stderr)
-            continue
+            print(f"AI processing failed: {exc}", file=sys.stderr)
 
     if failures:
         sys.exit(2)

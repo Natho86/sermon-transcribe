@@ -19,20 +19,16 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from urllib.parse import urlparse, urljoin
 
+from sermon_transcribe.ai import AIClient, configure_ai_logging
 from sermon_transcribe.cleanup import (
     apply_disclaimer,
-    build_prompt,
-    build_summary_chunk_prompt,
-    build_summary_merge_prompt,
-    build_summary_prompt,
-    call_llm,
-    generate_final_summary,
-    split_into_chunks,
+    clean_transcript,
     strip_disclaimer,
+    summarize_transcript,
+    write_text,
     DEFAULT_MODEL,
     DEFAULT_OPENROUTER_MODEL,
     DEFAULT_OPENAI_MODEL,
-    DEFAULT_SUMMARY_MAX_CHARS,
     SUMMARY_DISCLAIMER_TEXT,
 )
 from sermon_transcribe.folder_jobs import FolderJob, file_version, resolve_folder, scan_folder
@@ -402,8 +398,10 @@ def process_transcription(job_id: str, audio_path: Path, output_dir: Path, do_cl
 
             emit_progress(job_id, "processing", 50, "Transcription complete")
 
-            # Set initial paths (cleanup_transcript will update text_path if it runs)
+            # A new transcription replaces any unfinished summary checkpoint.
+            (output_dir / SUMMARY_CHECKPOINT).unlink(missing_ok=True)
             with jobs_lock:
+                jobs[job_id]["summary_pending"] = False
                 jobs[job_id]["text_path"] = str(result.text_path.absolute())
                 jobs[job_id]["json_path"] = str(result.json_path.absolute())
 
@@ -464,137 +462,65 @@ def cleanup_transcript(
         emit_progress(job_id, "processing", 60, "Skipping cleanup (no API key)")
         return
 
-    summary_path = write_cleaned_outputs(job_id, text_path, cleaned_path, provider_info)
-    if summary_path is None:
-        return
-
-    with jobs_lock:
-        jobs[job_id]["text_path"] = str(cleaned_path.absolute())
-        jobs[job_id]["summary_path"] = str(summary_path.absolute())
-
-    emit_progress(job_id, "processing", 90, "Cleanup complete", {
-        "summary_url": f"/download/{job_id}/summary",
-    })
-
-
-def get_provider_model(provider_info: dict) -> str:
-    provider = provider_info["provider"]
-    if provider == "openrouter":
-        return provider_info["model"] or DEFAULT_OPENROUTER_MODEL
-    if provider == "openai":
-        return provider_info["model"] or DEFAULT_OPENAI_MODEL
-    if provider == COMPATIBLE_PROVIDER:
-        return provider_info["model"]
-    return provider_info["model"] or os.environ.get("CLAUDE_MODEL", DEFAULT_MODEL)
-
-
-def write_cleaned_outputs(
-    job_id: str, text_path: Path, cleaned_path: Path, provider_info: dict
-) -> Optional[Path]:
     raw_text = strip_disclaimer(text_path.read_text(encoding="utf-8"))
-
     if not raw_text:
         emit_progress(job_id, "processing", 90, "Skipping cleanup (empty transcript)")
         return
 
-    # Clean transcript
-    model_name = get_provider_model(provider_info)
-    emit_progress(job_id, "processing", 65, "Cleaning transcript...")
-    chunks = split_into_chunks(raw_text, 8000)
-    cleaned_chunks = []
-
-    for idx, chunk in enumerate(chunks, start=1):
-        # Check for cancellation before processing each chunk
+    client = job_ai_client(job_id, provider_info)
+    with client.report():
+        cleaned = clean_transcript(
+            raw_text, client, progress=lambda index, count: emit_progress(
+                job_id, "processing", 65 + (index * 10 // count), f"Cleaning chunk {index}/{count}",
+            ),
+        )
         if is_job_cancelled(job_id):
             return
-
-        emit_progress(job_id, "processing", 65 + (idx * 10 // len(chunks)), f"Cleaning chunk {idx}/{len(chunks)}")
-        prompt = build_prompt(chunk)
-        try:
-            cleaned = call_llm(
-                prompt=prompt,
-                api_key=provider_info["key"],
-                model=model_name,
-                max_tokens=4000,
-                temperature=0.1,
-                timeout=120,
-                provider=provider_info["provider"],
-                base_url=provider_info.get("base_url"),
-                enable_thinking=provider_info.get("enable_thinking"),
-            )
-            cleaned_text_chunk = cleaned.strip()
-
-            # Warn if chunk came back empty but original wasn't
-            if not cleaned_text_chunk and chunk.strip():
-                print(f"WARNING: Chunk {idx}/{len(chunks)} returned empty from LLM (original had {len(chunk)} chars)", flush=True)
-                # Keep original chunk if LLM returns nothing
-                cleaned_chunks.append(chunk.strip())
-            else:
-                cleaned_chunks.append(cleaned_text_chunk)
-        except Exception as e:
-            # Check if error is due to cancellation
-            if is_job_cancelled(job_id):
-                return
-            print(f"ERROR: Chunk {idx}/{len(chunks)} failed to clean: {str(e)}", flush=True)
-            # Fall back to original chunk on error
-            cleaned_chunks.append(chunk.strip())
-
-    # Join all chunks, but verify we haven't lost content
-    cleaned_text = "\n\n".join(chunk for chunk in cleaned_chunks if chunk)
-
-    # Log if we lost chunks
-    non_empty_chunks = sum(1 for c in cleaned_chunks if c)
-    if non_empty_chunks < len(chunks):
-        print(f"WARNING: Lost {len(chunks) - non_empty_chunks} chunks during cleaning", flush=True)
-    summary_path = cleaned_path.with_name(f"{cleaned_path.stem}_summary.txt")
-    write_sermon_summary(job_id, cleaned_text, summary_path, provider_info)
-    if is_job_cancelled(job_id):
-        return None
-    cleaned_path.write_text(apply_disclaimer(cleaned_text), encoding="utf-8")
-    return summary_path
+        write_text(cleaned_path, apply_disclaimer(cleaned))
+        finish_job_summary(job_id, cleaned_path, client, cleaned)
 
 
-def write_sermon_summary(job_id: str, cleaned_text: str, summary_path: Path, provider_info: dict):
-    emit_progress(job_id, "processing", 80, "Generating summary...")
-    model_name = get_provider_model(provider_info)
+def job_ai_client(job_id: str, provider_info: dict) -> AIClient:
+    provider = provider_info["provider"]
+    defaults = {
+        "openrouter": DEFAULT_OPENROUTER_MODEL,
+        "openai": DEFAULT_OPENAI_MODEL,
+        "anthropic": os.environ.get("CLAUDE_MODEL") or DEFAULT_MODEL,
+    }
+    return AIClient(
+        provider, provider_info["model"] or defaults.get(provider), provider_info["key"],
+        base_url=provider_info.get("base_url"), enable_thinking=provider_info.get("enable_thinking"),
+        job_id=job_id, cancelled=lambda: is_job_cancelled(job_id),
+    )
 
-    def generate(prompt: str) -> str:
-        if is_job_cancelled(job_id):
-            raise RuntimeError("Job cancelled by user")
-        return call_llm(
-            prompt=prompt,
-            api_key=provider_info["key"],
-            model=model_name,
-            max_tokens=1200,
-            temperature=0.1,
-            timeout=120,
-            provider=provider_info["provider"],
-            base_url=provider_info.get("base_url"),
-            enable_thinking=provider_info.get("enable_thinking"),
+
+SUMMARY_CHECKPOINT = ".summary-pending"
+
+
+def finish_job_summary(job_id: str, text_path: Path, client: AIClient, transcript: str):
+    checkpoint = text_path.with_name(SUMMARY_CHECKPOINT)
+    write_text(checkpoint, text_path.name)
+    with jobs_lock:
+        jobs[job_id].update(
+            text_path=str(text_path.absolute()), text_url=f"/download/{job_id}/text", summary_pending=True,
         )
 
-    if len(cleaned_text) <= DEFAULT_SUMMARY_MAX_CHARS:
-        summary_prompt = build_summary_prompt(cleaned_text)
-    else:
-        summary_chunks = split_into_chunks(cleaned_text, DEFAULT_SUMMARY_MAX_CHARS)
-        chunk_notes = []
-        for idx, chunk in enumerate(summary_chunks, start=1):
-            # Check for cancellation before processing each summary chunk
-            if is_job_cancelled(job_id):
-                return
-
-            emit_progress(job_id, "processing", 80 + (idx * 5 // len(summary_chunks)), f"Summary chunk {idx}/{len(summary_chunks)}")
-            notes = generate(build_summary_chunk_prompt(chunk))
-            chunk_notes.append(notes.strip())
-
-        combined_notes = "\n\n".join(note for note in chunk_notes if note)
-        summary_prompt = build_summary_merge_prompt(combined_notes)
-
-    summary = generate_final_summary(summary_prompt, generate)
+    emit_progress(job_id, "processing", 80, "Generating summary...")
+    summary = summarize_transcript(
+        transcript, client, progress=lambda index, count: emit_progress(
+            job_id, "processing", 80 + (index * 5 // count), f"Summary chunk {index}/{count}",
+        ),
+    )
     if is_job_cancelled(job_id):
         return
-
-    summary_path.write_text(apply_disclaimer(summary, SUMMARY_DISCLAIMER_TEXT), encoding="utf-8")
+    summary_path = text_path.with_name(f"{text_path.stem}_summary.txt")
+    write_text(summary_path, apply_disclaimer(summary, SUMMARY_DISCLAIMER_TEXT))
+    checkpoint.unlink(missing_ok=True)
+    emit_progress(job_id, "processing", 90, "Summary complete", {
+        "summary_path": str(summary_path.absolute()),
+        "summary_url": f"/download/{job_id}/summary",
+        "summary_pending": False,
+    })
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -1516,10 +1442,14 @@ def find_original_audio(job_id: str) -> Optional[Path]:
     return None
 
 
-def process_existing_transcript(job_id: str, text_path: Path, provider_info: dict):
+def process_existing_transcript(job_id: str, text_path: Path, provider_info: dict, *, summary_only=False):
     """Clean and summarise the saved transcript using the job's normal progress updates."""
     try:
-        if not is_job_cancelled(job_id):
+        if summary_only and not is_job_cancelled(job_id):
+            client = job_ai_client(job_id, provider_info)
+            with client.report():
+                finish_job_summary(job_id, text_path, client, strip_disclaimer(text_path.read_text(encoding="utf-8")))
+        elif not is_job_cancelled(job_id):
             base_name = text_path.stem
             if base_name.endswith("_timestamps"):
                 base_name = base_name.removesuffix("_timestamps")
@@ -1592,7 +1522,8 @@ def start_reprocessing(job_id: str, data: dict, *, legacy_retranscribe: bool = F
             )
         else:
             thread = threading.Thread(
-                target=process_existing_transcript, args=(job_id, text_path, provider_info), daemon=True
+                target=process_existing_transcript, args=(job_id, text_path, provider_info),
+                kwargs={"summary_only": bool(job.get("summary_pending"))}, daemon=True,
             )
 
         with cancelled_lock:
@@ -1809,15 +1740,13 @@ def process_folder_jobs(
                 transcript = strip_disclaimer(text_path.read_text(encoding="utf-8"))
                 if not transcript:
                     raise RuntimeError("The saved transcript is empty")
-                summary_path = text_path.with_name(f"{text_path.stem}_summary.txt")
-                write_sermon_summary(job_id, transcript, summary_path, provider_info)
+                client = job_ai_client(job_id, provider_info)
+                with client.report():
+                    finish_job_summary(job_id, text_path, client, transcript)
                 if is_job_cancelled(job_id):
                     emit_progress(job_id, "cancelled", 0, "Job cancelled by user")
                 else:
-                    emit_progress(job_id, "completed", 100, "Processing complete", {
-                        "summary_path": str(summary_path),
-                        "summary_url": f"/download/{job_id}/summary",
-                    })
+                    emit_progress(job_id, "completed", 100, "Processing complete")
         except Exception as exc:
             if is_job_cancelled(job_id):
                 emit_progress(job_id, "cancelled", 0, "Job cancelled by user")
@@ -2107,6 +2036,16 @@ def load_existing_jobs():
 
         json_path = max(json_files, key=lambda path: path.stat().st_mtime_ns, default=None)
         text_path = text_path or raw_text_path
+        checkpoint = job_dir / SUMMARY_CHECKPOINT
+        summary_pending = False
+        if checkpoint.is_file():
+            try:
+                name = checkpoint.read_text(encoding="utf-8")
+                if name == Path(name).name and (job_dir / name).is_file():
+                    text_path = job_dir / name
+                    summary_pending = True
+            except (OSError, ValueError):
+                app.logger.warning("Could not read the summary checkpoint for job %s", job_id)
         if not base_filename:
             source = text_path or json_path
             if source:
@@ -2124,9 +2063,10 @@ def load_existing_jobs():
             job_data = {
                 "job_id": job_id,
                 "filename": base_filename,
-                "status": "completed",
-                "progress": 100,
-                "message": "Previously processed",
+                "status": "failed" if summary_pending else "completed",
+                "progress": 0 if summary_pending else 100,
+                "message": "Summary unfinished. Use Reprocess to retry the summary." if summary_pending else "Previously processed",
+                "summary_pending": summary_pending,
                 "created_at": mtime.isoformat(),
                 "updated_at": mtime.isoformat(),
             }
@@ -2168,6 +2108,7 @@ def handle_connect():
 
 def main():
     """Run the Flask web app."""
+    configure_ai_logging()
     ensure_dir(app.config["UPLOAD_FOLDER"])
     ensure_dir(app.config["OUTPUT_FOLDER"])
     ensure_dir(app.config["MODEL_CACHE"])

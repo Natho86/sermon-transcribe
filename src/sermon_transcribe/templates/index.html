@@ -534,7 +534,7 @@
             </div>
             <label class="st-option-row st-option-title">
                 <input type="checkbox" id="reprocessCleanup">
-                Clean and summarise with AI
+                <span id="reprocessCleanupLabel">Clean and summarise with AI</span>
             </label>
             <div id="reprocessError" role="alert" hidden></div>
         </div>
@@ -1472,7 +1472,7 @@
 
     function progressMarkup(job, widthPx) {
         if (job.status !== 'queued' && job.status !== 'processing') {
-            return job.folder_job ? '<div class="st-job-message"></div>' : '';
+            return job.folder_job || job.status === 'failed' ? '<div class="st-job-message"></div>' : '';
         }
         return `
             <div class="st-job-progress-bar" style="width:${widthPx};">
@@ -1818,6 +1818,8 @@
 
     function updateReprocessOptions() {
         reprocessLanguageField.hidden = !reprocessAudio.checked;
+        document.getElementById('reprocessCleanupLabel').textContent = reprocessJob.summary_pending && !reprocessAudio.checked
+            ? 'Retry the unfinished summary' : 'Clean and summarise with AI';
         reprocessCleanup.disabled = !reprocessAudio.checked && !reprocessJob.has_transcript;
         reprocessSubmit.disabled = reprocessPending ||
             !(reprocessAudio.checked || (reprocessCleanup.checked && !reprocessCleanup.disabled));
@@ -1832,10 +1834,10 @@
 
             reprocessJob = job;
             document.getElementById('reprocessTitle').textContent = `Reprocess ${job.filename}`;
-            reprocessAudio.checked = job.has_audio;
+            reprocessAudio.checked = job.has_audio && !job.summary_pending;
             reprocessAudio.disabled = !job.has_audio;
             reprocessAudioHint.hidden = job.has_audio;
-            reprocessCleanup.checked = job.cleanup || (!job.has_audio && job.has_transcript);
+            reprocessCleanup.checked = job.summary_pending || job.cleanup || (!job.has_audio && job.has_transcript);
             reprocessLanguage.value = job.language || 'en';
             if (!reprocessLanguage.value) reprocessLanguage.value = 'en';
             reprocessError.hidden = true;

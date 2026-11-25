@@ -295,6 +295,14 @@ Set **Thinking** to **On** or **Off** to override thinking for cleanup and summa
 
 The active provider handles transcript cleanup and summaries, including folder jobs. Speech transcription still uses Whisper. You can switch back to OpenRouter by enabling its saved provider.
 
+### AI generation and logs
+
+Transcript cleanup starts at temperature 0.1 and scales the output allowance with each chunk. Final summaries start at temperature 0.2 and 4,096 output tokens. Requests use the advertised context and output limits when available. OpenRouter requests use minimal reasoning for models that advertise reasoning support. Local servers use the existing **Thinking** setting.
+
+The app rejects truncated responses and retries with more room or reduced reasoning when supported. It saves a cleaned transcript only after every chunk passes validation. If summary generation alone fails, **Reprocess** defaults to retrying the unfinished summary from the saved transcript.
+
+Run `docker compose logs -f audio-transcribe-web` on the Docker host to see **AI request** and per-stage totals. The logs include finish reasons, retries, duration, and token usage or cost when the provider reports them. The failed job's message is also shown in the dashboard.
+
 ### Anthropic API Key
 
 1. Sign up at [Anthropic Console](https://console.anthropic.com/)
@@ -303,6 +311,10 @@ The active provider handles transcript cleanup and summaries, including folder j
    ```bash
    ANTHROPIC_API_KEY=sk-ant-api03-...
    ```
+
+### Tests
+
+Run the mocked AI provider tests with `PYTHONPATH=src python -m unittest discover -s tests -v`. They use temporary files and require no API keys or model downloads.
 
 ### Hugging Face Token (Optional)
 
