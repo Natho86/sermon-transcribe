@@ -7,7 +7,6 @@ import threading
 import time
 from dataclasses import replace
 from datetime import datetime
-from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory, TemporaryFile
 from typing import Dict, Optional
@@ -26,7 +25,6 @@ from sermon_transcribe.cleanup import (
     build_summary_chunk_prompt,
     build_summary_merge_prompt,
     build_summary_prompt,
-    call_claude,
     call_llm,
     generate_final_summary,
     split_into_chunks,
@@ -40,6 +38,9 @@ from sermon_transcribe.cleanup import (
 from sermon_transcribe.folder_jobs import FolderJob, file_version, resolve_folder, scan_folder
 from sermon_transcribe.io_utils import ensure_dir
 from sermon_transcribe.settings import (
+    COMPATIBLE_PROVIDER,
+    PROVIDERS,
+    compatible_base_url,
     load_keys,
     save_keys,
     get_active_provider,
@@ -482,6 +483,8 @@ def get_provider_model(provider_info: dict) -> str:
         return provider_info["model"] or DEFAULT_OPENROUTER_MODEL
     if provider == "openai":
         return provider_info["model"] or DEFAULT_OPENAI_MODEL
+    if provider == COMPATIBLE_PROVIDER:
+        return provider_info["model"]
     return provider_info["model"] or os.environ.get("CLAUDE_MODEL", DEFAULT_MODEL)
 
 
@@ -516,6 +519,7 @@ def write_cleaned_outputs(
                 temperature=0.1,
                 timeout=120,
                 provider=provider_info["provider"],
+                base_url=provider_info.get("base_url"),
             )
             cleaned_text_chunk = cleaned.strip()
 
@@ -564,6 +568,7 @@ def write_sermon_summary(job_id: str, cleaned_text: str, summary_path: Path, pro
             temperature=0.1,
             timeout=120,
             provider=provider_info["provider"],
+            base_url=provider_info.get("base_url"),
         )
 
     if len(cleaned_text) <= DEFAULT_SUMMARY_MAX_CHARS:
@@ -701,7 +706,7 @@ def api_get_keys():
     masked = []
     for entry in keys:
         raw = entry.get("key", "")
-        masked_key = raw[:8] + "..." + raw[-4:] if len(raw) > 12 else "****"
+        masked_key = raw[:8] + "..." + raw[-4:] if len(raw) > 12 else ("****" if raw else "")
         masked.append({
             "id": entry["id"],
             "label": entry.get("label", ""),
@@ -709,6 +714,7 @@ def api_get_keys():
             "model": entry.get("model", ""),
             "enabled": entry.get("enabled", False),
             "masked_key": masked_key,
+            "base_url": entry.get("base_url", ""),
         })
     env_key = os.environ.get("ANTHROPIC_API_KEY", "")
     env_configured = bool(env_key)
@@ -718,14 +724,20 @@ def api_get_keys():
 @app.route("/api/settings/keys", methods=["POST"])
 @login_required
 def api_add_key():
-    """Add a new API key."""
+    """Add an AI provider."""
     body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict) or any(
+        not isinstance(body.get(field, ""), str) for field in ("label", "provider", "key", "model")
+    ):
+        return jsonify({"error": "Provider settings must be text"}), 400
     label = body.get("label", "").strip()
     provider = body.get("provider", "anthropic").strip()
     key = body.get("key", "").strip()
     model = body.get("model", "").strip()
 
-    if not key:
+    if provider not in PROVIDERS:
+        return jsonify({"error": "Unknown AI provider"}), 400
+    if not key and provider != COMPATIBLE_PROVIDER:
         return jsonify({"error": "API key is required"}), 400
     if not label:
         return jsonify({"error": "Label is required"}), 400
@@ -740,6 +752,13 @@ def api_add_key():
         "model": model,
         "enabled": False,
     }
+    if provider == COMPATIBLE_PROVIDER:
+        if not model:
+            return jsonify({"error": "Model ID is required"}), 400
+        try:
+            new_entry["base_url"] = compatible_base_url(body.get("base_url", ""))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
     data.setdefault("keys", []).append(new_entry)
     save_keys(data)
     return jsonify({"success": True, "id": new_id})
@@ -748,14 +767,30 @@ def api_add_key():
 @app.route("/api/settings/keys/<key_id>", methods=["PUT"])
 @login_required
 def api_update_key(key_id: str):
-    """Update a stored API key (label, key value, or enabled state)."""
+    """Update a stored provider's settings or enabled state."""
     body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict) or any(
+        not isinstance(body.get(field, ""), str) for field in ("label", "key", "model")
+    ):
+        return jsonify({"error": "Provider settings must be text"}), 400
     data = load_keys()
     keys = data.get("keys", [])
 
     entry = next((k for k in keys if k["id"] == key_id), None)
     if not entry:
         return jsonify({"error": "Key not found"}), 404
+
+    if entry.get("provider") == COMPATIBLE_PROVIDER:
+        try:
+            base_url = compatible_base_url(body.get("base_url", entry.get("base_url", "")))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        model = body.get("model", entry.get("model", ""))
+        if not model.strip():
+            return jsonify({"error": "Model ID is required"}), 400
+        if "key" in body or base_url != entry.get("base_url"):
+            entry["key"] = body.get("key", "").strip()
+        entry["base_url"] = base_url
 
     if "label" in body:
         entry["label"] = body["label"].strip()
@@ -798,7 +833,10 @@ def api_verify_key(key_id: str):
     if not entry:
         return jsonify({"error": "Key not found"}), 404
 
-    result = verify_key(entry.get("provider", "anthropic"), entry["key"])
+    result = verify_key(
+        entry.get("provider", "anthropic"), entry.get("key", ""),
+        base_url=entry.get("base_url", ""), model=entry.get("model", ""),
+    )
     return jsonify(result)
 
 
@@ -807,11 +845,17 @@ def api_verify_key(key_id: str):
 def api_verify_key_raw():
     """Verify a key without storing it — used to load models before saving."""
     body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict) or any(
+        not isinstance(body.get(field, ""), str) for field in ("provider", "key")
+    ):
+        return jsonify({"error": "Provider settings must be text"}), 400
     provider = body.get("provider", "anthropic").strip()
     key = body.get("key", "").strip()
-    if not key:
+    if provider not in PROVIDERS:
+        return jsonify({"error": "Unknown AI provider"}), 400
+    if not key and provider != COMPATIBLE_PROVIDER:
         return jsonify({"error": "key is required"}), 400
-    result = verify_key(provider, key)
+    result = verify_key(provider, key, base_url=body.get("base_url", ""))
     return jsonify(result)
 
 
@@ -1460,7 +1504,11 @@ def process_existing_transcript(job_id: str, text_path: Path, provider_info: dic
     """Clean and summarise the saved transcript using the job's normal progress updates."""
     try:
         if not is_job_cancelled(job_id):
-            base_name = text_path.stem.removesuffix("_timestamps").removesuffix("_raw")
+            base_name = text_path.stem
+            if base_name.endswith("_timestamps"):
+                base_name = base_name.removesuffix("_timestamps")
+            else:
+                base_name = base_name.removesuffix("_raw")
             cleaned_path = text_path.with_name(f"{base_name}.txt")
             cleanup_transcript(job_id, text_path, cleaned_path, provider_info=provider_info)
 
@@ -1516,7 +1564,7 @@ def start_reprocessing(job_id: str, data: dict, *, legacy_retranscribe: bool = F
 
         provider_info = get_active_provider() if do_cleanup else None
         if do_cleanup and not provider_info and not legacy_retranscribe:
-            return jsonify({"error": "Configure an AI API key in Settings to clean and summarise"}), 400
+            return jsonify({"error": "Enable an AI provider in Settings to clean and summarise"}), 400
 
         if do_retranscribe:
             output_dir = app.config["OUTPUT_FOLDER"] / job_id
@@ -1566,7 +1614,7 @@ def retranscribe(job_id: str):
 @app.route("/upload-transcript", methods=["POST"])
 @login_required
 def upload_transcript():
-    """Handle raw transcript upload and optionally process with Claude."""
+    """Handle raw transcript upload and optionally use the active AI provider."""
     if "transcript" not in request.files:
         return jsonify({"error": "No file provided"}), 400
 
@@ -1575,6 +1623,8 @@ def upload_transcript():
         return jsonify({"error": "No file selected"}), 400
 
     do_cleanup = request.form.get("cleanup", "false").lower() == "true"
+
+    provider_info = get_active_provider() if do_cleanup else None
 
     # Generate job ID
     job_id = secrets.token_hex(16)
@@ -1601,14 +1651,15 @@ def upload_transcript():
     text_path = output_dir / f"{transcript_filename}{raw_suffix}.txt"
     text_path.write_text(transcript_content, encoding="utf-8")
 
+    status = "processing" if provider_info else "completed"
     # Initialize job
     with jobs_lock:
         jobs[job_id] = {
             "job_id": job_id,
             "filename": file.filename,
-            "status": "processing" if do_cleanup else "completed",
-            "progress": 50 if do_cleanup else 100,
-            "message": "Processing transcript..." if do_cleanup else "Transcript uploaded",
+            "status": status,
+            "progress": 50 if provider_info else 100,
+            "message": "Processing transcript..." if provider_info else "Transcript uploaded",
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat(),
             "cleanup": do_cleanup,
@@ -1616,83 +1667,10 @@ def upload_transcript():
             "text_url": f"/download/{job_id}/text",
         }
 
-    if do_cleanup:
-        # Process transcript with Claude in background
-        def process_transcript_cleanup():
-            try:
-                emit_progress(job_id, "processing", 60, "Cleaning transcript with Claude...")
-
-                api_key = os.environ.get("ANTHROPIC_API_KEY")
-                if not api_key:
-                    emit_progress(job_id, "completed", 100, "Upload complete (no API key for cleanup)")
-                    return
-
-                model_name = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
-
-                # Clean transcript
-                emit_progress(job_id, "processing", 65, "Cleaning transcript...")
-                chunks = split_into_chunks(transcript_content, 8000)
-                cleaned_chunks = []
-
-                for idx, chunk in enumerate(chunks, start=1):
-                    emit_progress(job_id, "processing", 65 + (idx * 10 // len(chunks)), f"Cleaning chunk {idx}/{len(chunks)}")
-                    prompt = build_prompt(chunk)
-                    cleaned = call_claude(
-                        prompt=prompt,
-                        api_key=api_key,
-                        model=model_name,
-                        max_tokens=1200,
-                        temperature=0.1,
-                        timeout=120,
-                    )
-                    cleaned_chunks.append(cleaned.strip())
-
-                cleaned_text = "\n\n".join(chunk for chunk in cleaned_chunks if chunk)
-                cleaned_path = output_dir / f"{transcript_filename}.txt"
-                cleaned_path.write_text(apply_disclaimer(cleaned_text), encoding="utf-8")
-
-                # Generate summary
-                emit_progress(job_id, "processing", 80, "Generating summary...")
-
-                generate = partial(
-                    call_claude,
-                    api_key=api_key,
-                    model=model_name,
-                    max_tokens=1200,
-                    temperature=0.1,
-                    timeout=120,
-                )
-                if len(cleaned_text) <= DEFAULT_SUMMARY_MAX_CHARS:
-                    summary_prompt = build_summary_prompt(cleaned_text)
-                else:
-                    summary_chunks = split_into_chunks(cleaned_text, DEFAULT_SUMMARY_MAX_CHARS)
-                    chunk_notes = []
-                    for idx, chunk in enumerate(summary_chunks, start=1):
-                        emit_progress(job_id, "processing", 80 + (idx * 5 // len(summary_chunks)), f"Summary chunk {idx}/{len(summary_chunks)}")
-                        notes = generate(build_summary_chunk_prompt(chunk))
-                        chunk_notes.append(notes.strip())
-
-                    combined_notes = "\n\n".join(note for note in chunk_notes if note)
-                    summary_prompt = build_summary_merge_prompt(combined_notes)
-
-                summary = generate_final_summary(summary_prompt, generate)
-                summary_path = output_dir / f"{transcript_filename}_summary.txt"
-                summary_path.write_text(apply_disclaimer(summary, SUMMARY_DISCLAIMER_TEXT), encoding="utf-8")
-
-                with jobs_lock:
-                    jobs[job_id]["text_path"] = str(cleaned_path.absolute())
-                    jobs[job_id]["summary_path"] = str(summary_path.absolute())
-                    jobs[job_id]["summary_url"] = f"/download/{job_id}/summary"
-
-                emit_progress(job_id, "completed", 100, "Processing complete", {
-                    "text_url": f"/download/{job_id}/text",
-                    "summary_url": f"/download/{job_id}/summary",
-                })
-
-            except Exception as exc:
-                emit_progress(job_id, "failed", 0, f"Error: {str(exc)}")
-
-        thread = threading.Thread(target=process_transcript_cleanup, daemon=True)
+    if provider_info:
+        thread = threading.Thread(
+            target=process_existing_transcript, args=(job_id, text_path, provider_info), daemon=True
+        )
         thread.start()
 
     return jsonify({"job_id": job_id, "status": jobs[job_id]["status"]})
@@ -1885,7 +1863,7 @@ def queue_folder_jobs():
 
     provider = get_active_provider() if do_cleanup or action == "summaries" else None
     if (do_cleanup or action == "summaries") and not provider:
-        return jsonify({"error": "Configure an AI API key in Settings for this action"}), 400
+        return jsonify({"error": "Enable an AI provider in Settings for this action"}), 400
 
     with jobs_lock:
         busy = {

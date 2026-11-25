@@ -49,7 +49,7 @@ A powerful audio transcription application designed for processing sermon record
    http://localhost:5000
    ```
 
-Use **Reprocess** in the job actions menu to retranscribe the audio, clean and summarise the saved transcript with AI, or run both steps in order. AI cleanup uses the active API key in **Settings**.
+Use **Reprocess** in the job actions menu to retranscribe the audio, clean and summarise the saved transcript with AI, or run both steps in order. AI cleanup uses the active provider in **Settings**.
 
 Under **Jobs**, tick the completed sermons you want to delete and choose **Delete selected**. **Select all visible completed jobs** selects the current search and filter results. Selections are kept when you change filters. Confirming deletion removes each job's uploaded or imported files and its outputs from the server.
 
@@ -282,6 +282,16 @@ docker run --rm \
 ```
 
 ## API Key Setup
+
+### Local llama.cpp server
+
+1. In the web dashboard, open **Settings → Add provider** and choose **OpenAI-compatible (llama.cpp)**.
+2. Enter the API base URL, such as `http://192.168.1.20:8080/v1`, using the host and port reachable from the Sermon Transcribe server or Docker container. Enter an API key if your llama.cpp server requires one.
+3. Click **Test connection** to load the server's model IDs. Select or enter the ID, save the provider, and enable it.
+
+If Sermon Transcribe runs on another host, configure llama.cpp to listen on your desktop's LAN address.
+
+The active provider handles transcript cleanup and summaries, including folder jobs. Speech transcription still uses Whisper. You can switch back to OpenRouter by enabling its saved provider.
 
 ### Anthropic API Key
 

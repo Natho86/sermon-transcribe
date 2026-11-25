@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Callable, Iterable, List, Optional
 
 from sermon_transcribe.io_utils import ensure_dir, readable_path
+from sermon_transcribe.settings import COMPATIBLE_PROVIDER, compatible_base_url, compatible_opener
 
 
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
@@ -479,8 +480,15 @@ def call_openai(
     temperature: float,
     timeout: int,
     max_retries: int = 3,
+    *,
+    base_url: Optional[str] = None,
 ) -> str:
-    """Call OpenAI's chat completions endpoint."""
+    """Call OpenAI or a compatible chat completions endpoint."""
+    if base_url is None:
+        url, open_request, service = OPENAI_API_URL, urllib.request.urlopen, "OpenAI"
+    else:
+        url = f"{compatible_base_url(base_url)}/chat/completions"
+        open_request, service = compatible_opener.open, "OpenAI-compatible server"
     payload = {
         "model": model,
         "max_tokens": max_tokens,
@@ -488,22 +496,24 @@ def call_openai(
         "messages": [{"role": "user", "content": prompt}],
     }
     data = json.dumps(payload).encode("utf-8")
-    headers = {
-        "content-type": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = {"content-type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
 
     last_error: Optional[Exception] = None
     for attempt in range(1, max_retries + 1):
-        req = urllib.request.Request(OPENAI_API_URL, data=data, headers=headers, method="POST")
+        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as response:
+            with open_request(req, timeout=timeout) as response:
                 body = response.read().decode("utf-8")
                 parsed = json.loads(body)
                 choices = parsed.get("choices", [])
                 if not choices:
-                    raise RuntimeError(f"OpenAI returned no choices: {body[:200]}")
-                return choices[0].get("message", {}).get("content", "").strip()
+                    raise RuntimeError(f"{service} returned no choices")
+                content = choices[0].get("message", {}).get("content")
+                if not isinstance(content, str) or not content.strip():
+                    raise RuntimeError(f"{service} returned no message text")
+                return content.strip()
         except urllib.error.HTTPError as exc:
             last_error = exc
             if exc.code in {429, 500, 502, 503, 504} and attempt < max_retries:
@@ -511,18 +521,18 @@ def call_openai(
                 continue
             error_body = exc.read().decode("utf-8") if exc.fp else str(exc)
             if exc.code in {401, 403}:
-                raise RuntimeError("OpenAI API key is invalid or unauthorized.") from exc
-            raise RuntimeError(f"OpenAI API error {exc.code}: {error_body}") from exc
+                raise RuntimeError(f"{service} API key is missing or invalid.") from exc
+            raise RuntimeError(f"{service} API error {exc.code}: {error_body}") from exc
         except urllib.error.URLError as exc:
             last_error = exc
             if attempt < max_retries:
                 time.sleep(2**attempt)
                 continue
-            raise RuntimeError(f"OpenAI connection error: {exc}") from exc
+            raise RuntimeError(f"{service} connection error: {exc}") from exc
 
     if last_error:
-        raise RuntimeError(f"OpenAI request failed: {last_error}") from last_error
-    raise RuntimeError("OpenAI request failed with unknown error.")
+        raise RuntimeError(f"{service} request failed: {last_error}") from last_error
+    raise RuntimeError(f"{service} request failed with unknown error.")
 
 
 def call_llm(
@@ -534,6 +544,8 @@ def call_llm(
     timeout: int,
     provider: str = "anthropic",
     max_retries: int = 3,
+    *,
+    base_url: Optional[str] = None,
 ) -> str:
     """Dispatch an LLM call to the appropriate provider."""
     if provider == "openrouter":
@@ -546,7 +558,9 @@ def call_llm(
             timeout=timeout,
             max_retries=max_retries,
         )
-    if provider == "openai":
+    if provider in ("openai", COMPATIBLE_PROVIDER):
+        if provider == COMPATIBLE_PROVIDER and not base_url:
+            raise ValueError("An OpenAI-compatible server base URL is required")
         return call_openai(
             prompt=prompt,
             api_key=api_key,
@@ -555,6 +569,7 @@ def call_llm(
             temperature=temperature,
             timeout=timeout,
             max_retries=max_retries,
+            base_url=base_url if provider == COMPATIBLE_PROVIDER else None,
         )
     return call_claude(
         prompt=prompt,

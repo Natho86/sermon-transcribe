@@ -5,6 +5,10 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlsplit
+
+COMPATIBLE_PROVIDER = "openai-compatible"
+PROVIDERS = {"anthropic", "openai", "openrouter", COMPATIBLE_PROVIDER}
 
 _lock = threading.Lock()
 _config_path: Optional[Path] = None
@@ -37,18 +41,21 @@ def save_keys(data: dict) -> None:
 
 
 def get_active_provider() -> Optional[dict]:
-    """Return info about the active key: {key, provider, model} or None.
+    """Return the active provider's connection details, or None.
 
     Falls back to env var ANTHROPIC_API_KEY with provider='anthropic'.
     """
     data = load_keys()
     for entry in data.get("keys", []):
         if entry.get("enabled"):
-            return {
+            provider = {
                 "key": entry.get("key", ""),
                 "provider": entry.get("provider", "anthropic"),
                 "model": entry.get("model") or None,
             }
+            if provider["provider"] == COMPATIBLE_PROVIDER:
+                provider["base_url"] = entry["base_url"]
+            return provider
     env_key = os.environ.get("ANTHROPIC_API_KEY")
     if env_key:
         return {
@@ -144,10 +151,72 @@ def verify_openai_key(api_key: str) -> dict:
         return {"valid": False, "error": f"Connection error: {exc}"}
 
 
-def verify_key(provider: str, api_key: str) -> dict:
+def compatible_base_url(value: str) -> str:
+    """Validate a custom HTTP API base URL before appending endpoint paths."""
+    if not isinstance(value, str):
+        raise ValueError("Enter an HTTP or HTTPS base URL, such as http://192.168.1.20:8080/v1")
+    url = value.strip().rstrip("/")
+    try:
+        parts = urlsplit(url)
+        if (
+            parts.scheme in ("http", "https")
+            and parts.hostname
+            and parts.port != 0
+            and parts.username is None
+            and "?" not in url
+            and "#" not in url
+            and "\\" not in url
+            and not any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in url)
+        ):
+            return url
+    except ValueError:
+        pass
+    raise ValueError("Enter an HTTP or HTTPS base URL without credentials, a query string, or a fragment")
+
+
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Keep saved credentials and inference requests on the configured endpoint.
+        return None
+
+
+compatible_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirectHandler())
+
+
+def verify_compatible_server(api_key: str, base_url: str, model: str) -> dict:
+    """Check the models endpoint of an OpenAI-compatible server."""
+    try:
+        url = f"{compatible_base_url(base_url)}/models"
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        with compatible_opener.open(req, timeout=10) as resp:
+            body = json.load(resp)
+        if not isinstance(body, dict) or not isinstance(body.get("data"), list):
+            raise ValueError("Expected a model list from the server")
+        ids = sorted({
+            item["id"] for item in body["data"]
+            if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"]
+        })
+        result = {"valid": True, "models": [{"id": model_id, "name": model_id} for model_id in ids]}
+        if model and model not in ids:
+            result.update(valid=False, error=f"Model {model} is not listed by the server")
+        return result
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            return {"valid": False, "error": "The server requires a valid API key"}
+        return {"valid": False, "error": f"Models endpoint returned HTTP {exc.code}. Check the base URL."}
+    except OSError:
+        return {"valid": False, "error": "Could not connect to the configured server from the app"}
+    except ValueError as exc:
+        return {"valid": False, "error": str(exc)}
+
+
+def verify_key(provider: str, api_key: str, *, base_url: str = "", model: str = "") -> dict:
     """Dispatch key verification to the correct provider."""
     if provider == "openrouter":
         return verify_openrouter_key(api_key)
     if provider == "openai":
         return verify_openai_key(api_key)
+    if provider == COMPATIBLE_PROVIDER:
+        return verify_compatible_server(api_key, base_url, model)
     return verify_anthropic_key(api_key)

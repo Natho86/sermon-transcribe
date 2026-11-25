@@ -92,7 +92,7 @@
     .st-edit-form.visible { display: block; }
 
     .st-model-fetch-wrap { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
-    .st-model-fetch-wrap select { flex: 1; }
+    .st-model-fetch-wrap select, .st-model-fetch-wrap input { flex: 1; min-width: 0; }
     .st-model-filter { margin-top: 8px; }
 
     .st-env-notice {
@@ -129,15 +129,14 @@
 {% block content %}
 <div class="st-page st-page-narrow">
     <h1>Settings</h1>
-    <p class="st-subtitle">Manage AI provider API keys for transcript cleanup and summarization.</p>
+    <p class="st-subtitle">Manage AI providers for transcript cleanup and summarization.</p>
 
     <div class="st-card st-section" style="margin-top:24px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-            <h2>API keys</h2>
+            <h2>AI providers</h2>
         </div>
         <p class="st-section-desc">
-            Only one key can be active at a time. Supported providers: <strong>Anthropic</strong> (direct), <strong>OpenAI</strong> (GPT-4o and others), and <strong>OpenRouter</strong> (access 200+ models).
-            For OpenAI and OpenRouter keys, click <em>Verify &amp; load models</em> to pick a specific model.
+            One provider can be active at a time. Choose <strong>OpenAI-compatible</strong> to connect a server such as llama.cpp.
         </p>
 
         <div id="envNotice" class="st-env-notice" style="display:none;">
@@ -145,16 +144,16 @@
             <div>
                 <strong>Environment key configured</strong> &mdash;
                 An <code>ANTHROPIC_API_KEY</code> is set via environment variable and will be used as
-                a fallback when no key below is enabled.
+                a fallback when no provider below is enabled.
             </div>
         </div>
 
         <div id="keyList" class="st-key-list">
-            <div style="color:var(--textMuted); font-size:13px;">Loading keys…</div>
+            <div style="color:var(--textMuted); font-size:13px;">Loading providers…</div>
         </div>
 
         <div style="margin-top: 16px;">
-            <button class="st-btn st-btn-secondary" onclick="toggleAddForm()">+ Add key</button>
+            <button class="st-btn st-btn-secondary" onclick="toggleAddForm()">+ Add provider</button>
         </div>
 
         <!-- Add key form -->
@@ -170,12 +169,31 @@
                         <option value="anthropic">Anthropic (Claude)</option>
                         <option value="openai">OpenAI (GPT)</option>
                         <option value="openrouter">OpenRouter</option>
+                        <option value="openai-compatible">OpenAI-compatible (llama.cpp)</option>
                     </select>
                 </div>
             </div>
             <div class="st-form-group" style="margin-bottom: 10px;">
-                <label class="st-label" for="newKey">API key</label>
+                <label class="st-label" for="newKey" id="newKeyLabel">API key</label>
                 <input class="st-input" type="password" id="newKey" placeholder="sk-..." autocomplete="off">
+            </div>
+
+            <div id="newCompatibleWrap" hidden>
+                <div class="st-form-group" style="margin-bottom:10px;">
+                    <label class="st-label" for="newBaseUrl">API base URL</label>
+                    <input class="st-input" type="url" id="newBaseUrl" placeholder="http://192.168.1.20:8080/v1">
+                </div>
+                <div class="st-form-group" style="margin-bottom:10px;">
+                    <label class="st-label" for="newCompatibleModel">Model ID</label>
+                    <div class="st-model-fetch-wrap">
+                        <input class="st-input" type="text" id="newCompatibleModel" list="compatibleModels" autocomplete="off">
+                        <datalist id="compatibleModels"></datalist>
+                        <button class="st-btn st-btn-secondary st-btn-sm" type="button" onclick="testCompatibleServer()">
+                            Test connection
+                        </button>
+                    </div>
+                    <div id="newCompatibleStatus" role="status" class="st-key-verify-result"></div>
+                </div>
             </div>
 
             <!-- Model selector — shown for OpenRouter / OpenAI -->
@@ -201,7 +219,7 @@
             </div>
 
             <div class="st-form-actions">
-                <button class="st-btn st-btn-primary" onclick="addKey()">Save key</button>
+                <button class="st-btn st-btn-primary" onclick="addKey()">Save provider</button>
                 <button class="st-btn st-btn-secondary" onclick="toggleAddForm()">Cancel</button>
             </div>
         </div>
@@ -213,6 +231,7 @@
 {% block scripts %}
 <script>
     let keysData = [];
+    const compatibleProvider = 'openai-compatible';
 
     // ── Load & render ─────────────────────────────────────────────────────
     async function loadKeys() {
@@ -225,24 +244,25 @@
             renderKeys();
         } catch {
             document.getElementById('keyList').innerHTML =
-                '<div style="color:var(--statusBad);">Failed to load keys.</div>';
+                '<div style="color:var(--statusBad);">Failed to load providers.</div>';
         }
     }
 
     function renderKeys() {
         const list = document.getElementById('keyList');
         if (!keysData.length) {
-            list.innerHTML = '<div style="color:var(--textMuted); font-size:13px;">No API keys added yet.</div>';
+            list.innerHTML = '<div style="color:var(--textMuted); font-size:13px;">No AI providers added yet.</div>';
             return;
         }
         list.innerHTML = keysData.map(k => buildCard(k)).join('');
     }
 
     function buildCard(k) {
+        const compatible = k.provider === compatibleProvider;
         const providerBadgeMap = {openrouter: 'st-badge-openrouter', openai: 'st-badge-openai'};
-        const providerBadgeClass = providerBadgeMap[k.provider] || 'st-badge-anthropic';
+        const providerBadgeClass = compatible ? 'st-badge-openai' : providerBadgeMap[k.provider] || 'st-badge-anthropic';
         const providerLabelMap = {openrouter: 'OpenRouter', openai: 'OpenAI'};
-        const providerLabel = providerLabelMap[k.provider] || 'Anthropic';
+        const providerLabel = compatible ? 'OpenAI-compatible' : providerLabelMap[k.provider] || 'Anthropic';
         const modelLine = k.model
             ? `<div class="st-key-model">Model: <code>${escHtml(k.model)}</code></div>` : '';
 
@@ -255,7 +275,8 @@
                 <span class="st-badge ${providerBadgeClass}">${providerLabel}</span>
                 <span class="st-badge ${k.enabled ? 'st-badge-active' : 'st-badge-inactive'}">${k.enabled ? 'Active' : 'Inactive'}</span>
             </div>
-            <div class="st-key-masked">${escHtml(k.masked_key)}</div>
+            <div class="st-key-masked">${escHtml(k.masked_key || 'No API key')}</div>
+            ${compatible ? `<div class="st-key-model"><code>${escHtml(k.base_url)}</code></div>` : ''}
             ${modelLine}
             <div class="st-key-verify-result" id="verify-${k.id}"></div>
 
@@ -269,10 +290,16 @@
                     <div class="st-form-group">
                         <label class="st-label">New API key <span style="font-weight:400;color:var(--textMuted);">(leave blank to keep current)</span></label>
                         <input class="st-input" type="password" id="edit-key-${k.id}" placeholder="Paste new key…" autocomplete="off">
+                        ${compatible && k.masked_key ? `<label><input type="checkbox" id="clear-key-${k.id}"> Remove saved API key</label>` : ''}
                     </div>
                 </div>
+                ${compatible ? `<div class="st-form-group" style="margin-bottom:10px;">
+                    <label class="st-label" for="edit-base-url-${k.id}">API base URL</label>
+                    <input class="st-input" type="url" id="edit-base-url-${k.id}" value="${escHtml(k.base_url)}">
+                    <small>Re-enter the API key if you change the URL and the new server requires it.</small>
+                </div>` : ''}
                 <div class="st-form-group" style="margin-bottom:10px;" id="edit-model-group-${k.id}">
-                    <label class="st-label">Model</label>
+                    <label class="st-label" for="edit-model-${k.id}">${compatible ? 'Model ID' : 'Model'}</label>
                     ${(k.provider === 'openrouter' || k.provider === 'openai')
                            ? `<div class="st-model-fetch-wrap">
                                <select class="st-select" id="edit-model-${k.id}" data-model-select="edit-model-${k.id}">
@@ -283,7 +310,7 @@
                            <input class="st-input st-model-filter" id="edit-model-filter-${k.id}" type="search"
                                   placeholder="Filter models…" oninput="filterModelSelect('edit-model-${k.id}', this.value)" autocomplete="off">
                            <div id="edit-model-status-${k.id}" style="font-size:12px;margin-top:4px;color:var(--textMuted);"></div>`
-                        : `<input class="st-input" type="text" id="edit-model-${k.id}" value="${escHtml(k.model || '')}" placeholder="e.g. claude-opus-4-8 (leave blank for default)">`
+                        : `<input class="st-input" type="text" id="edit-model-${k.id}" value="${escHtml(k.model || '')}" placeholder="${compatible ? 'Model ID from the server' : 'e.g. claude-opus-4-8 (leave blank for default)'}">`
                     }
                 </div>
                 <div class="st-form-actions">
@@ -302,7 +329,7 @@
                     <span class="st-toggle-slider"></span>
                 </label>
             </label>
-            <button class="st-btn st-btn-secondary st-btn-sm" onclick="verifyKey('${k.id}')">Verify</button>
+            <button class="st-btn st-btn-secondary st-btn-sm" onclick="verifyKey('${k.id}')">${compatible ? 'Test connection' : 'Verify'}</button>
             <button class="st-btn st-btn-secondary st-btn-sm" onclick="openEdit('${k.id}')">Edit</button>
             <button class="st-btn st-btn-secondary st-btn-sm st-btn-destructive" onclick="deleteKey('${k.id}')">Remove</button>
         </div>
@@ -322,6 +349,9 @@
         const hasModelDropdown = provider === 'openrouter' || provider === 'openai';
         document.getElementById('newModelWrap').style.display = hasModelDropdown ? 'block' : 'none';
         document.getElementById('newAnthropicModelWrap').style.display = provider === 'anthropic' ? 'block' : 'none';
+        const compatible = provider === compatibleProvider;
+        document.getElementById('newCompatibleWrap').hidden = !compatible;
+        document.getElementById('newKeyLabel').textContent = compatible ? 'API key (optional)' : 'API key';
     }
 
     async function fetchModelsForNew() {
@@ -367,21 +397,35 @@
         }
     }
 
-    async function fetchModels(provider, apiKey, statusEl) {
-        // Temporarily save key to a throwaway call — we verify directly from the frontend
-        // via a lightweight endpoint that verifies without permanently storing the key.
-        // We re-use the /verify endpoint by temporarily creating a ghost — but since we
-        // don't want to store yet, we call a direct endpoint instead.
+    async function testCompatibleServer() {
+        const baseUrl = document.getElementById('newBaseUrl').value.trim();
+        const apiKey = document.getElementById('newKey').value.trim();
+        const modelInput = document.getElementById('newCompatibleModel');
+        const status = document.getElementById('newCompatibleStatus');
+        const suggestions = document.getElementById('compatibleModels');
+        suggestions.replaceChildren();
+        status.textContent = 'Testing connection…';
+        const models = await fetchModels(compatibleProvider, apiKey, status, baseUrl);
+        if (!models) return;
+        suggestions.replaceChildren(...models.map(model => new Option(model.id, model.id)));
+        if (!modelInput.value && models.length === 1) modelInput.value = models[0].id;
+        if (modelInput.value && !models.some(model => model.id === modelInput.value.trim())) {
+            status.textContent = 'Connected. Choose a model ID listed by the server.';
+        }
+    }
+
+    async function fetchModels(provider, apiKey, statusEl, baseUrl) {
         try {
             const resp = await fetch('/api/settings/keys/verify-raw', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({provider, key: apiKey}),
+                body: JSON.stringify({provider, key: apiKey, base_url: baseUrl}),
             });
             const data = await resp.json();
             if (data.valid) {
                 const count = data.models ? data.models.length : 0;
-                statusEl.innerHTML = `<span class="ok">&#10003; Valid — ${count} model(s) available</span>`;
+                const result = provider === compatibleProvider ? 'Connected' : 'Valid';
+                statusEl.innerHTML = `<span class="ok">&#10003; ${result} — ${count} model(s) available</span>`;
                 return data.models || [];
             } else {
                 statusEl.innerHTML = `<span class="bad">&#10007; ${escHtml(data.error || 'Invalid key')}</span>`;
@@ -456,19 +500,27 @@
         const provider = document.getElementById('newProvider').value;
         const key = document.getElementById('newKey').value.trim();
         let model = '';
-        if (provider === 'openrouter' || provider === 'openai') {
+        const compatible = provider === compatibleProvider;
+        if (compatible) {
+            model = document.getElementById('newCompatibleModel').value.trim();
+        } else if (provider === 'openrouter' || provider === 'openai') {
             model = document.getElementById('newModel').value.trim();
         } else {
             model = document.getElementById('newAnthropicModel').value.trim();
         }
 
         if (!label) return showToast('Label is required', 'error');
-        if (!key) return showToast('API key is required', 'error');
+        if (!key && !compatible) return showToast('API key is required', 'error');
+        const body = {label, provider, key, model};
+        if (compatible) {
+            body.base_url = document.getElementById('newBaseUrl').value.trim();
+            if (!body.base_url || !model) return showToast('Base URL and model ID are required', 'error');
+        }
 
         const resp = await fetch('/api/settings/keys', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({label, provider, key, model}),
+            body: JSON.stringify(body),
         });
         const data = await resp.json();
         if (data.success) {
@@ -478,11 +530,15 @@
             document.getElementById('newModelFilter').value = '';
             delete modelCatalog.newModel;
             document.getElementById('newAnthropicModel').value = '';
+            document.getElementById('newBaseUrl').value = '';
+            document.getElementById('newCompatibleModel').value = '';
+            document.getElementById('newCompatibleStatus').textContent = '';
+            document.getElementById('compatibleModels').replaceChildren();
             document.getElementById('addKeyForm').classList.remove('visible');
-            showToast('Key added', 'success');
+            showToast('Provider added', 'success');
             await loadKeys();
         } else {
-            showToast(data.error || 'Failed to add key', 'error');
+            showToast(data.error || 'Failed to add provider', 'error');
         }
     }
 
@@ -497,14 +553,19 @@
         if (!label) return showToast('Label is required', 'error');
         const body = {label, model};
         if (key) body.key = key;
+        const baseUrl = document.getElementById(`edit-base-url-${id}`);
+        if (baseUrl) {
+            body.base_url = baseUrl.value.trim();
+            if (!key && document.getElementById(`clear-key-${id}`)?.checked) body.key = '';
+        }
         const resp = await fetch(`/api/settings/keys/${id}`, {
             method: 'PUT',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(body),
         });
         const data = await resp.json();
-        if (data.success) { showToast('Key updated', 'success'); await loadKeys(); }
-        else showToast(data.error || 'Failed to update key', 'error');
+        if (data.success) { showToast('Provider updated', 'success'); await loadKeys(); }
+        else showToast(data.error || 'Failed to update provider', 'error');
     }
 
     // ── Enable / delete / verify ──────────────────────────────────────────
@@ -515,15 +576,15 @@
             body: JSON.stringify({enabled: enable}),
         });
         const data = await resp.json();
-        if (data.success) { showToast(enable ? 'Key enabled' : 'Key disabled', 'success'); await loadKeys(); }
-        else { showToast(data.error || 'Failed to update key', 'error'); await loadKeys(); }
+        if (data.success) { showToast(enable ? 'Provider enabled' : 'Provider disabled', 'success'); await loadKeys(); }
+        else { showToast(data.error || 'Failed to update provider', 'error'); await loadKeys(); }
     }
 
     async function deleteKey(id) {
-        if (!confirm('Delete this API key? This cannot be undone.')) return;
+        if (!confirm('Remove this provider from Settings?')) return;
         const resp = await fetch(`/api/settings/keys/${id}`, {method: 'DELETE'});
         const data = await resp.json();
-        if (data.success) { showToast('Key deleted', 'success'); await loadKeys(); }
+        if (data.success) { showToast('Provider deleted', 'success'); await loadKeys(); }
         else showToast(data.error || 'Failed to delete', 'error');
     }
 
@@ -540,7 +601,8 @@
                 const extra = hasModelList
                     ? ` — ${count} model(s) available`
                     : (count ? ` — ${count} model(s)` : '');
-                resultEl.innerHTML = `<span class="ok">&#10003; Valid key${extra}</span>`;
+                const result = entry?.provider === compatibleProvider ? 'Connected' : 'Valid key';
+                resultEl.innerHTML = `<span class="ok">&#10003; ${result}${extra}</span>`;
                 if (data.error) resultEl.innerHTML += ` <span class="warn">(${escHtml(data.error)})</span>`;
             } else {
                 resultEl.innerHTML = `<span class="bad">&#10007; ${escHtml(data.error || 'Invalid key')}</span>`;
