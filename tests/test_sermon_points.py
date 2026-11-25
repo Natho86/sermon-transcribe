@@ -5,6 +5,12 @@ from sermon_transcribe.sermon_points import log_point_notes, verified_main_point
 
 
 class PointRegressionTests(unittest.TestCase):
+    def test_announced_point_can_drop_trailing_confirmation(self):
+        source = "So the first thing we're going to look at is the truth that Herod refused to obey, okay?"
+        point = "The truth that Herod refused to obey"
+        self.assertEqual(verified_main_points(f"- {point} || {source}", source), [point])
+        self.assertEqual(verified_main_points(f"- {point.replace('obey', 'accept')} || {source}", source), [])
+
     def test_matthew_14_parallel_points_and_repetition(self):
         points = [
             "Jesus is the only worthy object of faith",
@@ -29,6 +35,16 @@ class PointRegressionTests(unittest.TestCase):
         introduction = "First one relates to the question of authority,\nwhich is that God's truth regulates human tradition."
         self.assertEqual(verified_main_points(proposed, introduction + "\n" + second + "\n" + first), points)
         self.assertEqual(verified_main_points(f"- {points[0]} || {introduction}", introduction), points[:1])
+        full_headings = [
+            "The question of authority: God's truth regulates human tradition.",
+            "The question of acceptance: God's sight exposes the human heart and would have us be cleaned by him.",
+        ]
+        second_with_colon = second.replace("acceptance.\n", "acceptance: ")
+        proposed = f"- {full_headings[0]} || {first}\n- {full_headings[1]} || {second_with_colon}"
+        self.assertEqual(
+            verified_main_points(proposed, introduction + "\n" + second_with_colon + "\n" + first),
+            full_headings,
+        )
 
     def test_five_points_in_source_order_and_sensitive_rejections_counted(self):
         source = " ".join(f"{name}, {word} matters." for name, word in zip(

@@ -299,15 +299,19 @@ Main points:
 - Extract up to {MAX_POINTS} main points explicitly stated by the preacher.
 - Look for announced sermon points, clearly identified headings and transitions between principal sections.
 - Look also for recaps and lists of parallel statements in a single sentence. Extract each complete point separately with its own exact quotation. Include complete qualifiers.
-- Preserve the preacher's original wording as closely as possible.
-- Minor punctuation changes and removal of conversational introductory phrases are permitted.
+- Copy the preacher's words exactly. Minor punctuation changes and removal of
+  conversational lead-ins are permitted. Keep the original subjects and verbs,
+  even when they are pronouns or depend on the surrounding sermon for context.
 - Where the preacher provides a heading and an associated statement, these may be combined using a colon.
 - Do not expand the points with additional explanations, theological claims or applications.
 - Do not combine unrelated statements to create a new teaching point.
 - Preserve the original order of the points.
 - Do not invent a sermon structure.
 - If no explicit main points can be reliably identified, write "{NO_POINTS}"
-- After each point, add {QUOTE_SEPARATOR} and a verbatim supporting quotation from the transcript. Include the original heading if used and enough of the surrounding wording to preserve any qualifications. Keep the point and quotation on the same line. The quotation is for internal verification.
+- After each point, add {QUOTE_SEPARATOR} and one continuous verbatim quotation
+  from the transcript. Include the spoken outline marker or original heading
+  when present and enough surrounding wording to preserve any qualifications.
+  Keep the point and quotation on the same line. The quotation is for internal verification.
 
 Bible references:
 - List the principal sermon passage first, where reliably identifiable.
@@ -410,13 +414,15 @@ Notes:
 
 def normalize_summary(summary: str, *, transcript: str | None = None, job_id=None) -> str:
     sections = re.fullmatch(
-        r"Summary:[ \t]*\n(.+?)\n\s*Main points:[ \t]*\n(.+?)\n\s*Bible references:[ \t]*\n(.+)",
+        r"Summary:[ \t]*\n(.+?)(?:\n\s*Main points:[ \t]*\n(.+?))?\n\s*Bible references:[ \t]*\n(.+)",
         summary.replace("\r\n", "\n").strip(),
         flags=re.DOTALL | re.IGNORECASE,
     )
     if not sections:
-        raise ValueError("Use the exact headings Summary, Main points, and Bible references, with content under each.")
-    paragraph, points, references = (section.strip() for section in sections.groups())
+        raise ValueError("Use the exact headings Summary and Bible references, and Main points if included.")
+    paragraph, points, references = sections.groups()
+    paragraph = paragraph.strip()
+    points = points.strip() if points is not None else NO_POINTS
     count = len(paragraph.split())
     if not 0 < count <= SUMMARY_MAX_WORDS:
         raise ValueError(f"The summary paragraph has {count} words. Use 1 to {SUMMARY_MAX_WORDS} words.")
@@ -439,9 +445,12 @@ def normalize_summary(summary: str, *, transcript: str | None = None, job_id=Non
         if len({words(point) for point in bullets}) != len(bullets):
             raise ValueError("Use distinct main points and remove repeated bullets.")
         point_text = bullets
-    formatted_points = "\n".join(f"- {point}" for point in point_text) if point_text else NO_POINTS
     normalized_references = normalize_bible_references(references)
-    return f"Summary:\n{paragraph}\n\nMain points:\n{formatted_points}\n\nBible references:\n{normalized_references}"
+    output = [f"Summary:\n{paragraph}"]
+    if point_text:
+        output.append("Main points:\n" + "\n".join(f"- {point}" for point in point_text))
+    output.append(f"Bible references:\n{normalized_references}")
+    return "\n\n".join(output)
 
 
 def summary_validation_error(summary: str) -> str | None:

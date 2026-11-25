@@ -23,10 +23,12 @@ OUTLINE = re.compile(
 )
 ABBREVIATION = re.compile(r"\b(?:mr|mrs|ms|dr|rev|st|cf|v|vv|e\.g|i\.e)\.(?=\s)", re.I)
 LEAD_IN = re.compile(r"^(?:(?:and|now|so)\b[:,]?\s+)+", re.I)
+QUESTION_LEAD_IN = re.compile(r"^(?:we['’]ll|we will) (?:think|talk) about (?=(?:the )?question of\s+)", re.I)
 HEADING_LEAD_IN = re.compile(
     r"^(?:(?:we['’]ll|we will) (?:think|talk) about )?(?:the )?question of\s+", re.I,
 )
 POINT_LEAD_IN = re.compile(r"^(?:is )?that\s+", re.I)
+CONFIRMATION_TAG = re.compile(r",\s*okay\?\s*$", re.I)
 HEADING_LINK = re.compile(r"^([^,]+),\s+which is that\s+(.+)$", re.I)
 LIST_MARKER = re.compile(r"^(?:[-*•–—]|[0-9]+[.)])\s+")
 FINAL_TRANSITION = re.compile(r"^(?:and |so )?that (?:just )?(?:kind of )?brings us to (?:a|the) final point:\s*", re.I)
@@ -84,16 +86,21 @@ def _outline_points(transcript: str):
         )
         variants = [body]
         if announced:
-            variants.append(HEADING_LEAD_IN.sub("", POINT_LEAD_IN.sub("", body)))
+            point_body = POINT_LEAD_IN.sub("", body)
+            variants.append(HEADING_LEAD_IN.sub("", point_body))
+            if QUESTION_LEAD_IN.match(point_body):
+                variants.append(QUESTION_LEAD_IN.sub("", point_body, count=1))
+            if CONFIRMATION_TAG.search(point_body):
+                variants.append(CONFIRMATION_TAG.sub("", point_body, count=1))
         if announced or labelled:
             for variant in variants:
                 if point := words(variant):
                     yield point, (index, 0), point
         if announced and (link := HEADING_LINK.fullmatch(body)):
             heading, statement = link.groups()
-            heading = HEADING_LEAD_IN.sub("", heading)
-            if 1 <= len(words(heading).split()) <= 8:
-                yield words(f"{heading} {statement}"), (index, 0), words(body)
+            for variant in dict.fromkeys((heading, HEADING_LEAD_IN.sub("", heading))):
+                if 1 <= len(words(variant).split()) <= 8:
+                    yield words(f"{variant} {statement}"), (index, 0), words(body)
         if announced and (restart := RESTART.fullmatch(body)) and words(restart[2]).split()[:2] == words(restart[1]).split():
             point = words(restart[2])
             yield point, (index, 0), point

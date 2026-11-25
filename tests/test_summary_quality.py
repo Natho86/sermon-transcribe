@@ -10,6 +10,10 @@ FINAL = (
     "Summary:\nA study of Matthew 15 and the condition of the heart.\n\n"
     "Main points:\nNone noted.\n\nBible references:\n- Matthew 15:1–20"
 )
+PUBLISHED_WITHOUT_POINTS = (
+    "Summary:\nA study of Matthew 15 and the condition of the heart.\n\n"
+    "Bible references:\n- Matthew 15:1–20"
+)
 AUTHORITY = "Authority: God's truth regulates human tradition."
 AUTHORITY_QUOTE = "Our first point is authority. God's truth regulates human tradition."
 ACCEPTANCE = "Acceptance: God's sight exposes the human heart and would have us be cleansed by him."
@@ -30,7 +34,7 @@ def completion(text, finish="stop"):
 
 
 def with_references(section):
-    return FINAL.rsplit("\n", 1)[0] + "\n" + section
+    return PUBLISHED_WITHOUT_POINTS.rsplit("\n", 1)[0] + "\n" + section
 
 
 class PromptTests(unittest.TestCase):
@@ -101,8 +105,9 @@ class ValidationTests(unittest.TestCase):
         three = FINAL.replace(description, "He discusses authority. He turns to acceptance. He also mentions prayer.")
         self.assertIn("one or two short sentences", cleanup.summary_validation_error(three))
         none = FINAL.replace("- Matthew 15:1–20", "None noted.")
-        self.assertEqual(cleanup.normalize_summary(none), none)
-        self.assertIn("exact headings", cleanup.summary_validation_error(none.replace("Main points:", "Topics:")))
+        self.assertEqual(cleanup.normalize_summary(none), with_references("None noted."))
+        self.assertIsNotNone(cleanup.summary_validation_error(none.replace("Main points:", "Topics:")))
+        self.assertIn("exact headings", cleanup.summary_validation_error(none.replace("Bible references:", "Passages:")))
 
     def test_extracts_zero_to_three_points_in_transcript_order(self):
         source = (
@@ -120,8 +125,10 @@ class ValidationTests(unittest.TestCase):
                     "None noted.", "\n".join(f"- {point}" for point in reversed(announced[:count])) or "None noted.",
                 )
                 result = cleanup.normalize_summary(response, transcript=source)
-                published = "\n".join(f"- {point.split(' || ')[0]}" for point in announced[:count]) or "None noted."
-                self.assertEqual(result, FINAL.replace("None noted.", published))
+                published = "\n".join(f"- {point.split(' || ')[0]}" for point in announced[:count])
+                expected = FINAL.replace("None noted.", published) if published else PUBLISHED_WITHOUT_POINTS
+                self.assertEqual(result, expected)
+                self.assertEqual(cleanup.normalize_summary(result), expected)
 
     def test_matches_conservative_punctuation_and_omits_unverified_claims(self):
         source = (
@@ -249,14 +256,14 @@ class SummaryWorkflowTests(unittest.TestCase):
     def test_unannounced_point_is_omitted_without_an_additional_request(self):
         response = FINAL.replace("None noted.", "- We discuss authority. || We discuss authority.")
         client, sent = self.mock_client(lambda *_: completion(response))
-        self.assertEqual(cleanup.summarize_transcript("We discuss authority.", client), FINAL)
+        self.assertEqual(cleanup.summarize_transcript("We discuss authority.", client), PUBLISHED_WITHOUT_POINTS)
         self.assertEqual(len(sent), 1)
 
     def test_direct_summary_beyond_16000_when_complete_prompt_fits(self):
         text = ("God calls us to trust him in adversity. " * 510) + "The preacher ends with a call to pray."
         self.assertGreater(len(text), cleanup.DEFAULT_SUMMARY_MAX_CHARS)
         client, sent = self.mock_client(lambda *_: completion(FINAL), context=16000, output=2500)
-        self.assertEqual(cleanup.summarize_transcript(text, client), FINAL)
+        self.assertEqual(cleanup.summarize_transcript(text, client), PUBLISHED_WITHOUT_POINTS)
         self.assertEqual(len(sent), 1)
         self.assertEqual(sent[0]["max_tokens"], 2500)
         prompt = sent[0]["messages"][0]["content"]
@@ -275,7 +282,7 @@ class SummaryWorkflowTests(unittest.TestCase):
             return completion(FINAL)
 
         client, sent = self.mock_client(reply)
-        self.assertEqual(cleanup.summarize_transcript(text, client), FINAL)
+        self.assertEqual(cleanup.summarize_transcript(text, client), PUBLISHED_WITHOUT_POINTS)
         self.assertEqual(len(sent), 3)
         for index, payload in enumerate(sent[:2]):
             prompt = payload["messages"][0]["content"]
@@ -300,7 +307,7 @@ class SummaryWorkflowTests(unittest.TestCase):
             return completion(FINAL)
 
         client, sent = self.mock_client(reply, context=12000)
-        self.assertEqual(cleanup.summarize_transcript(text, client), FINAL)
+        self.assertEqual(cleanup.summarize_transcript(text, client), PUBLISHED_WITHOUT_POINTS)
         self.assertEqual([payload["max_tokens"] for payload in sent[:3]], [4096, 2048, 4096])
         for payload in sent:
             self.assertLessEqual(ai.estimate_tokens(payload["messages"][0]["content"])
@@ -323,7 +330,7 @@ class SummaryWorkflowTests(unittest.TestCase):
             return completion(FINAL)
 
         client, _ = self.mock_client(reply)
-        self.assertEqual(cleanup.summarize_transcript(text, client, max_chars=200), FINAL)
+        self.assertEqual(cleanup.summarize_transcript(text, client, max_chars=200), PUBLISHED_WITHOUT_POINTS)
         self.assertEqual(consolidation_calls, 4)
 
         def no_progress(prompt, budget):
@@ -343,7 +350,7 @@ class SummaryWorkflowTests(unittest.TestCase):
             lambda prompt, _: completion("Key teachings:\n- Evidence." if prompt.startswith("Extract") else FINAL),
             context=8192, output=2048,
         )
-        self.assertEqual(cleanup.summarize_transcript(text, client), FINAL)
+        self.assertEqual(cleanup.summarize_transcript(text, client), PUBLISHED_WITHOUT_POINTS)
         for payload in sent:
             prompt = payload["messages"][0]["content"]
             self.assertLessEqual(ai.estimate_tokens(prompt) + payload["max_tokens"] + ai.CONTEXT_HEADROOM, 8192)
@@ -352,7 +359,7 @@ class SummaryWorkflowTests(unittest.TestCase):
     def test_normalization_avoids_retry_and_invalid_reference_gets_targeted_retry(self):
         variant = with_references("- matthew 15:1-20\n- Matthew 15:12")
         client, sent = self.mock_client(lambda *_: completion(variant))
-        self.assertEqual(cleanup.summarize_transcript("Saved transcript.", client), FINAL)
+        self.assertEqual(cleanup.summarize_transcript("Saved transcript.", client), PUBLISHED_WITHOUT_POINTS)
         self.assertEqual(len(sent), 1)
 
         def reply(prompt, _):
@@ -362,7 +369,7 @@ class SummaryWorkflowTests(unittest.TestCase):
             return completion(with_references("- Apostle Paul"))
 
         client, sent = self.mock_client(reply)
-        self.assertEqual(cleanup.summarize_transcript("Saved transcript.", client), FINAL)
+        self.assertEqual(cleanup.summarize_transcript("Saved transcript.", client), PUBLISHED_WITHOUT_POINTS)
         self.assertEqual(len(sent), 2)
 
     def test_splitter_preserves_paragraph_and_sentence_boundaries(self):
