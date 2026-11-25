@@ -16,11 +16,6 @@ CASES = (
         """Summary:
 A sermon examining the execution of John the Baptist by Herod Antipas in Matthew 14, contrasting Herod's pride with faithful obedience to Jesus.
 
-Main points:
-- The truth that Herod refused to obey || So the first thing we're going to look at is the truth that Herod refused to obey.
-- The fear that ruled Herod || But the next thing we look at is the fear that ruled Herod.
-- The King John came to announce || And that just kind of brings us to a final point: the King John came to announce.
-
 Bible references:
 - Matthew 14:1–12
 - Matthew 4:17
@@ -36,13 +31,6 @@ Like this poor man, John the Baptist. And that just kind of brings us to a final
     (
         """Summary:
 This sermon considers the feeding of the five thousand in Matthew 14, focusing on Jesus' provision and the role of his disciples.
-
-Main points:
-- Jesus is presenting himself in this miracle, first of all, as the compassionate one. || And Jesus is presenting himself in this miracle, first of all, as the compassionate one.
-- He's also presenting himself as the head of the household. || But Jesus is presenting himself not just as the compassionate one in this passage; he's also presenting himself as the head of the household.
-- He is the abundant supplier of our needs. || But thirdly, he is also—and this is the main point of the passage—he is the abundant supplier of our needs.
-- The disciples are unable to provide for the people on their own. || You see, what is being emphasised in this passage, first of all, is that the disciples are unable to provide for the people on their own.
-- They are able to provide for people with what Jesus supplies to them. || These disciples are unable to provide for people on their own, and yet, at the same time, they are able to provide for people with what Jesus supplies to them.
 
 Bible references:
 - Matthew 14:13–21
@@ -87,22 +75,19 @@ class GeminiReplayTests(unittest.TestCase):
                 )
                 with self.assertLogs("sermon_transcribe.ai", "INFO") as recorded:
                     process_transcript_file(raw, text, summary, args, client)
-                published = "\n".join(line.split(" || ", 1)[0] for line in completion.splitlines())
+
                 logs = "\n".join(recorded.output)
                 self.assertIn(f"kind=cleaned filename='sermon.txt' chars={len(cleaned)} "
                               f"sha256={hashlib.sha256(cleaned.encode()).hexdigest()}", logs)
                 self.assertNotIn(cleaned, logs)
                 self.assertEqual(text.read_text(), DISCLAIMER_TEXT + "\n\n" + cleaned + "\n")
-                self.assertEqual(summary.read_text(), SUMMARY_DISCLAIMER_TEXT + "\n\n" + published + "\n")
+                self.assertEqual(summary.read_text(), SUMMARY_DISCLAIMER_TEXT + "\n\n" + completion + "\n")
                 self.assertEqual(len(requests), 2)
                 self.assertTrue(requests[1].endswith(cleaned))
-                self.assertEqual(normalize_summary(published), published)
-                if index == 0:
-                    # The cleaned wording is unsupported when the raw text is
-                    # actually the summary source.
-                    self.assertNotIn("- The fear that ruled Herod", normalize_summary(completion, transcript=raw.read_text()))
+                self.assertEqual(normalize_summary(completion), completion)
 
-    def test_chunked_replay_verifies_against_full_saved_transcript(self):
+
+    def test_chunked_replay_saves_overview_and_references(self):
         completion, cleaned = CASES[1]
         client = AIClient("openrouter", "fixture", "", job_id="gemini-chunked")
         client.model_limits = ModelLimits()
@@ -124,8 +109,8 @@ class GeminiReplayTests(unittest.TestCase):
                 temperature=None, summary_max_chars=450, summary_max_tokens=None,
             )
             process_transcript_file(raw, text, summary, args, client)
-            published = "\n".join(line.split(" || ", 1)[0] for line in completion.splitlines())
-            self.assertEqual(summary.read_text(), SUMMARY_DISCLAIMER_TEXT + "\n\n" + published + "\n")
+
+            self.assertEqual(summary.read_text(), SUMMARY_DISCLAIMER_TEXT + "\n\n" + completion + "\n")
             self.assertTrue(all(prompt.startswith("Extract") for prompt in seen[:-1]))
             self.assertIn("consecutive sections", seen[-1])
             self.assertNotIn(cleaned, seen[-1])

@@ -304,7 +304,7 @@ Transcript cleanup starts at temperature 0.1 and scales the output allowance wit
 
 The app prefers to summarise the complete transcript when it fits the reported context. With no context information, it uses a 16,000-character threshold. Larger inputs use ordered extraction notes, with a separate consolidation prompt if the notes still need to be shortened.
 
-Summaries use British English and describe the sermon in one or two factual sentences of up to 40 words total. The app publishes up to five main points after checking them against supporting quotations from the saved transcript and omits points it cannot verify. The published file shows only the verified points or `None noted.`
+Summaries use British English and describe the sermon in one or two factual sentences of up to 40 words total.
 
 The model identifies up to five Bible references from the sermon. The app checks citation form, standardises formatting, combines consecutive verses and removes redundant entries.
 
@@ -312,9 +312,7 @@ The app rejects truncated responses and retries with more room or reduced reason
 
 Run `docker compose logs -f audio-transcribe-web` on the Docker host to see **AI request** and per-stage totals. The logs include finish reasons, retries, duration, and token usage or cost when the provider reports them. The failed job's message is also shown in the dashboard.
 
-Look for **AI main points** to see how many points were generated, parsed, verified or rejected, with rejection counts by reason. **AI point notes** tracks proposals and supporting quotations through extraction and consolidation without printing their text.
-
-**AI summary source** records the source type, filename, character count and SHA-256 digest of the text used for generation and point verification.
+**AI summary source** records the source type, filename, character count and SHA-256 digest of the text used for summary generation.
 
 ### Anthropic API Key
 
