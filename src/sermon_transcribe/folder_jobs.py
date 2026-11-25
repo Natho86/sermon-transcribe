@@ -28,19 +28,13 @@ class FolderSermon:
         reserved = ("_summary", "_timestamps", "_raw")
         return not self.stem.lower().endswith(reserved) and self.has_source("wav")
 
-    def destination(self, folder: Path, kind: str) -> Path:
-        files = self.files.get(kind, [])
-        if len(files) > 1:
-            raise ValueError(f"{self.stem} has multiple files for {kind}")
-        return files[0] if files else folder / f"{self.stem}{FILE_SUFFIXES[kind]}"
-
 
 @dataclass
 class FolderJob:
     key: str
-    source: Path
-    destinations: dict[str, Path]
-    versions: dict[Path, tuple[int, int, int, int] | None]
+    audio: Path | None
+    transcript: Path | None
+    versions: dict[Path, tuple[int, int, int, int]]
 
 
 def resolve_folder(root: Path, relative: str) -> Path:
@@ -58,7 +52,7 @@ def resolve_folder(root: Path, relative: str) -> Path:
     return folder
 
 
-def scan_folder(folder: Path, *, include_outputs_only: bool = False) -> tuple[list[str], dict[str, FolderSermon]]:
+def scan_folder(folder: Path) -> tuple[list[str], dict[str, FolderSermon]]:
     directories = []
     sermons: dict[str, FolderSermon] = {}
     for path in sorted(folder.iterdir(), key=lambda path: (path.name.casefold(), path.name)):
@@ -79,7 +73,7 @@ def scan_folder(folder: Path, *, include_outputs_only: bool = False) -> tuple[li
     sermons = {
         stem: sermon
         for stem, sermon in sorted(sermons.items())
-        if include_outputs_only or "wav" in sermon.files or "transcript" in sermon.files
+        if "wav" in sermon.files or "transcript" in sermon.files
     }
     return directories, sermons
 

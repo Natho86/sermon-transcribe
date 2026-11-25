@@ -51,11 +51,11 @@ A powerful audio transcription application designed for processing sermon record
 
 Use **Reprocess** in the job actions menu to retranscribe the audio, clean and summarise the saved transcript with AI, or run both steps in order. AI cleanup uses the active API key in **Settings**.
 
-Under **Jobs**, tick the completed sermons you want to delete and choose **Delete selected**. **Select all visible completed jobs** selects the current search and filter results. Selections are kept when you change filters. Confirming deletion removes each original upload and its outputs from the server. For a folder sermon, it removes the matching recording, transcript, timestamps, summary and converted audio from the staging folder.
+Under **Jobs**, tick the completed sermons you want to delete and choose **Delete selected**. **Select all visible completed jobs** selects the current search and filter results. Selections are kept when you change filters. Confirming deletion removes each job's uploaded or imported files and its outputs from the server.
 
 ### Process a server folder
 
-To enable **Process a folder**, mount your staging directory into the app container with write access and set `SERMON_FOLDER_ROOT` to its path inside the container. For example, mount `/mnt/user/sermons/staging` as `/sermons` on Unraid and set `SERMON_FOLDER_ROOT=/sermons`. A Docker Compose override can supply the same settings:
+To enable **Process a folder**, mount your staging directory into the app container and set `SERMON_FOLDER_ROOT` to its path inside the container. A read-only mount is sufficient. For example, mount `/mnt/user/sermons/staging` as `/sermons` on Unraid and set `SERMON_FOLDER_ROOT=/sermons`. A Docker Compose override can supply the same settings:
 
 ```yaml
 services:
@@ -63,7 +63,7 @@ services:
     environment:
       SERMON_FOLDER_ROOT: /sermons
     volumes:
-      - /mnt/user/sermons/staging:/sermons
+      - /mnt/user/sermons/staging:/sermons:ro
 ```
 
 In the dashboard, open **Process a folder** and navigate to a month such as `2026/01`. The scan lists that folder's sermons and groups files with the same base name. Check individual sermons or use **Select all sermons**. An action is available when every selected sermon has the source it needs.
@@ -72,11 +72,11 @@ In the dashboard, open **Process a folder** and navigate to a month such as `202
 | --- | --- | --- |
 | Fully reprocess WAVs | WAV | Transcript, timestamps JSON, summary, M4A, and FLAC |
 | Regenerate transcriptions | WAV | Transcript and timestamps JSON. With AI cleanup enabled, also regenerates the summary. |
-| Regenerate summaries | Saved transcript `<name>.txt` | Summary only |
+| Regenerate summaries | Saved transcript `<name>.txt` | Copy of the transcript and a new summary |
 
-Selected outputs replace matching files in the staging folder after generation. If a matching `_timestamps.txt` already exists, the WAV actions refresh it too. AI actions use the active provider in **Settings**. If you use rclone, stage the WAVs and their existing companions together, then upload the reviewed outputs after the jobs finish.
+WAVs are copied into the app's upload storage. A summary job also imports a matching WAV when one is available, so you can retranscribe it later. Results go into the standard output folder, and AI actions use the active provider in **Settings**.
 
-In **Jobs**, open the **⋮** menu on a completed folder job to download individual outputs or choose **Download all files** for a ZIP. Downloads read from the staging folder. Choose **Remove job** to clear an entry from the dashboard and keep the sermon files. Deleting a folder sermon through **Delete selected** also clears any other job entries for that sermon.
+Folder jobs appear under **Jobs** with the same **⋮** menu as uploaded jobs. Review or edit the transcript, preview the available outputs, reprocess, or download the ZIP. Review, reprocessing, and deletion operate on the app's job files. If you use rclone, download the reviewed outputs before uploading them to your destination.
 
 ## Configuration
 

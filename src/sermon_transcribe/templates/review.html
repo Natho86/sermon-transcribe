@@ -135,9 +135,11 @@
     <div class="rv-page">
         <div class="rv-col">
             <!-- Audio Player Section -->
-            <div class="st-card">
+            <div class="st-card"{% if not has_wav %} hidden{% endif %}>
                 <audio id="audioPlayer" preload="metadata">
+                    {% if has_wav %}
                     <source src="/api/audio/{{ job.job_id }}" type="audio/wav">
+                    {% endif %}
                     Your browser does not support the audio element.
                 </audio>
 
@@ -197,18 +199,20 @@
 
                 <!-- Mode Toggle -->
                 <div class="rv-mode-toggle">
-                    <button class="rv-mode-btn active" id="viewModeBtn">View &amp; sync</button>
+                    <button class="rv-mode-btn active" id="viewModeBtn">{{ 'View & sync' if has_segments and has_wav else 'View' }}</button>
                     <button class="rv-mode-btn" id="editModeBtn">Edit</button>
                 </div>
 
                 <!-- View Mode (with segments) -->
                 <div class="rv-view-container active" id="viewContainer">
+                    {% if has_segments and has_wav %}
                     <div class="rv-sync-info">
                         <strong>Audio sync:</strong> Click on any text to jump to that moment in the audio.
                         <span class="rv-edited-example">Red italic text</span> indicates edited segments that cannot be synced.
                     </div>
+                    {% endif %}
                     <div class="rv-transcript-view" id="transcriptView">
-                        Loading transcript segments...
+                        Loading transcript...
                     </div>
                 </div>
 
@@ -222,13 +226,15 @@
                         <button class="rv-action-btn" id="downloadBtn">Download</button>
                         <button class="rv-action-btn" id="downloadAllBtn">Download all</button>
                         <button class="rv-action-btn" id="regenerateBtn">Regenerate clean version</button>
-                        <button class="rv-action-btn" id="retranscribeBtn">Re-transcribe audio</button>
+                        <button class="rv-action-btn" id="retranscribeBtn"{% if not has_audio %} hidden{% endif %}>Re-transcribe audio</button>
                     </div>
                 </div>
 
                 <div class="rv-keyboard-hint">
                     <strong>Keyboard shortcuts:</strong>
-                    Space = Play/Pause &nbsp;·&nbsp; Left/Right arrows = Skip ±10s &nbsp;·&nbsp; Ctrl+S = Save (Edit mode) &nbsp;·&nbsp; Click text to seek audio (View mode)
+                    {% if has_wav %}Space = Play/Pause &nbsp;·&nbsp; Left/Right arrows = Skip ±10s &nbsp;·&nbsp;{% endif %}
+                    Ctrl+S = Save (Edit mode)
+                    {% if has_segments and has_wav %}&nbsp;·&nbsp; Click text to seek audio (View mode){% endif %}
                 </div>
             </div>
         </div>
@@ -256,7 +262,9 @@
     <div class="rv-notification" id="notification"></div>
 
     <script>
-        const jobId = "{{ job.job_id }}";
+        const jobId = {{ job.job_id | tojson }};
+        const hasWav = {{ has_wav | tojson }};
+        const hasSegments = {{ has_segments | tojson }};
         const audioPlayer = document.getElementById('audioPlayer');
         const playPauseBtn = document.getElementById('playPauseBtn');
         const skipBackBtn = document.getElementById('skip-back');
@@ -361,6 +369,11 @@
 
         // Load segments with timestamps
         async function loadSegments() {
+            if (!hasSegments) {
+                transcriptView.style.whiteSpace = 'pre-wrap';
+                transcriptView.textContent = transcriptEditor.value;
+                return;
+            }
             try {
                 const response = await fetch(`/api/segments/${jobId}`);
                 const data = await response.json();
@@ -422,7 +435,7 @@
                 span.dataset.end = segment.end;
 
                 // Only add click handler for unedited segments
-                if (!isEdited) {
+                if (hasWav && !isEdited) {
                     span.addEventListener('click', () => {
                         audioPlayer.currentTime = segment.start;
                         if (audioPlayer.paused) {
@@ -430,7 +443,7 @@
                             playPauseBtn.textContent = '❙❙';
                         }
                     });
-                } else {
+                } else if (isEdited) {
                     span.title = 'This segment has been edited and cannot be synced with audio';
                 }
 
@@ -590,12 +603,40 @@
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `{{ job.filename }}_edited.txt`;
+            a.download = {{ (job.filename.rsplit('/', 1)[-1] ~ '_edited.txt') | tojson }};
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
             showNotification('Transcript downloaded');
+        }
+
+        function pollForReprocessing(onFailure) {
+            const interval = setInterval(async () => {
+                try {
+                    const response = await fetch(`/status/${jobId}`);
+                    const job = await response.json();
+                    if (!response.ok) throw new Error(job.error);
+
+                    if (job.status === 'completed') {
+                        clearInterval(interval);
+                        clearTimeout(timeout);
+                        location.reload();
+                    } else if (['failed', 'cancelled'].includes(job.status)) {
+                        clearInterval(interval);
+                        clearTimeout(timeout);
+                        onFailure?.();
+                        showNotification(job.message, 'error');
+                    }
+                } catch (error) {
+                    console.error('Error polling status:', error);
+                }
+            }, 5000);
+            const timeout = setTimeout(() => {
+                clearInterval(interval);
+                onFailure?.();
+                showNotification('Processing is taking longer than expected. Check Jobs for progress.', 'error');
+            }, 600000);
         }
 
         // Regenerate cleaned transcript and summary
@@ -624,38 +665,10 @@
                 if (response.ok) {
                     showNotification('Regeneration started! This will take a few minutes. The page will refresh when complete.');
 
-                    // Poll for completion (check every 5 seconds)
-                    const pollInterval = setInterval(async () => {
-                        try {
-                            const statusResponse = await fetch(`/status/${jobId}`);
-                            const statusData = await statusResponse.json();
-
-                            if (statusData.status === 'completed') {
-                                clearInterval(pollInterval);
-                                clearTimeout(pollTimeout);
-                                showNotification('Regeneration complete! Reloading page...');
-                                setTimeout(() => {
-                                    location.reload();
-                                }, 2000);
-                            } else if (['failed', 'cancelled'].includes(statusData.status)) {
-                                clearInterval(pollInterval);
-                                clearTimeout(pollTimeout);
-                                regenerateBtn.disabled = false;
-                                regenerateBtn.textContent = 'Regenerate clean version';
-                                showNotification(statusData.message, 'error');
-                            }
-                        } catch (error) {
-                            console.error('Error polling status:', error);
-                        }
-                    }, 5000);
-
-                    // Timeout after 10 minutes
-                    const pollTimeout = setTimeout(() => {
-                        clearInterval(pollInterval);
+                    pollForReprocessing(() => {
                         regenerateBtn.disabled = false;
                         regenerateBtn.textContent = 'Regenerate clean version';
-                        showNotification('Regeneration is taking longer than expected. Please refresh the page to check status.', 'error');
-                    }, 600000);
+                    });
                 } else {
                     showNotification('Failed to regenerate: ' + data.error, 'error');
                     regenerateBtn.disabled = false;
@@ -821,7 +834,7 @@
                 <div style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(15,23,42,.6); display: flex; align-items: center; justify-content: center; z-index: 10000; padding: 20px;">
                     <div style="background: var(--surface); padding: 24px; border-radius: 14px; max-width: 440px; width: 100%; box-shadow: var(--shadowMd);">
                         <h3 style="margin: 0 0 4px; font-size: 16px;">Re-transcribe audio</h3>
-                        <p style="color: var(--textMuted); margin: 0 0 16px; font-size: 13px;">Choose language and options for re-transcription. This will create a new transcription job.</p>
+                        <p style="color: var(--textMuted); margin: 0 0 16px; font-size: 13px;">Choose language and options for re-transcription. This will update the job’s transcript.</p>
                         <label class="st-label">Language</label>
                         ${languageSelectHTML}
                         <label style="display: flex; align-items: center; gap: 8px; margin: 14px 0; cursor: pointer; font-size: 13px; color: var(--text2);">
@@ -871,10 +884,7 @@
 
                     if (response.ok) {
                         showNotification(`Re-transcription started! Page will reload when complete...`, 'success');
-                        // Reload the page after a short delay to show the updated transcription
-                        setTimeout(() => {
-                            window.location.reload();
-                        }, 2000);
+                        pollForReprocessing();
                     } else {
                         showNotification(`Failed to start re-transcription: ${data.error}`, 'error');
                     }
@@ -1016,19 +1026,19 @@
             }
 
             // Space to play/pause (only if not focused on textarea)
-            if (e.code === 'Space' && document.activeElement !== transcriptEditor) {
+            if (hasWav && e.code === 'Space' && document.activeElement !== transcriptEditor) {
                 e.preventDefault();
                 playPauseBtn.click();
             }
 
             // Left arrow to skip back
-            if (e.key === 'ArrowLeft' && document.activeElement !== transcriptEditor) {
+            if (hasWav && e.key === 'ArrowLeft' && document.activeElement !== transcriptEditor) {
                 e.preventDefault();
                 skipBackBtn.click();
             }
 
             // Right arrow to skip forward
-            if (e.key === 'ArrowRight' && document.activeElement !== transcriptEditor) {
+            if (hasWav && e.key === 'ArrowRight' && document.activeElement !== transcriptEditor) {
                 e.preventDefault();
                 skipForwardBtn.click();
             }
@@ -1043,8 +1053,7 @@
         });
 
         // Load transcript and segments on page load
-        loadTranscript();
-        loadSegments();
+        loadTranscript().then(loadSegments);
     </script>
 </body>
 </html>

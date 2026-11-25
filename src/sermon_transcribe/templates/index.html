@@ -734,11 +734,11 @@
             submit.disabled = pending || !action.value;
 
             const changes = {
-                full: 'Replaces the transcript, timestamps, summary, M4A and FLAC.',
+                full: 'Saves a transcript, timestamps, summary, M4A and FLAC to the job output folder.',
                 transcriptions: cleanup.checked
-                    ? 'Replaces the transcript, timestamps and summary.'
-                    : 'Replaces the transcript and timestamps with new transcription output.',
-                summaries: 'Replaces only the summary using the saved transcript.',
+                    ? 'Saves a transcript, timestamps and summary to the job output folder.'
+                    : 'Saves a transcript and timestamps to the job output folder.',
+                summaries: 'Saves the source transcript and a new summary to the job output folder.',
             };
             let hint = 'Select sermons to see the available actions.';
             if (action.value) {
@@ -1442,39 +1442,14 @@
     }
 
     function jobActionsMarkup(job, idPrefix) {
-        if (job.folder_job) {
-            if (job.status === 'completed' && Object.keys(job.folder_downloads || {}).length) {
-                const labels = {
-                    text: 'Transcript', json: 'Timestamps JSON', timestamps_text: 'Timestamps text',
-                    summary: 'Summary', m4a: 'M4A', flac: 'FLAC',
-                };
-                const links = Object.entries(labels)
-                    .filter(([type]) => Object.hasOwn(job.folder_downloads, type))
-                    .map(([type, label]) => `<a href="/download/${job.job_id}/${type}" download>Download ${label}</a>`)
-                    .join('');
-                return jobActionsDropdown(job, idPrefix, `
-                    <div class="st-group-label">Download</div>
-                    ${links}
-                    <a href="/download/${job.job_id}/all" download>Download all files</a>
-                    <button class="delete-btn" data-job-id="${job.job_id}">Remove job</button>
-                `);
-            }
-            if (job.status === 'queued' || (job.status === 'processing' && job.progress < 95)) {
-                return `<button class="st-cancel-btn cancel-btn" data-job-id="${job.job_id}">Cancel</button>`;
-            }
-            if (['completed', 'failed', 'cancelled'].includes(job.status)) {
-                return `<button class="st-delete-btn delete-btn" data-job-id="${job.job_id}">Remove job</button>`;
-            }
-            return '';
-        }
         if (job.status === 'completed') {
             return jobActionsDropdown(job, idPrefix, `
                 <div class="st-group-label">View</div>
                 <a href="/review/${job.job_id}">Review &amp; edit</a>
-                <a href="#" class="view-file" data-url="/download/${job.job_id}/text" data-type="text" data-filename="${job.filename}">View transcript</a>
-                ${job.json_url ? `<a href="#" class="view-file" data-url="/download/${job.job_id}/json" data-type="json" data-filename="${job.filename}">View JSON</a>` : ''}
+                <a href="#" class="view-file" data-url="/download/${job.job_id}/text" data-type="text" data-job-id="${job.job_id}">View transcript</a>
+                ${job.json_url ? `<a href="#" class="view-file" data-url="/download/${job.job_id}/json" data-type="json" data-job-id="${job.job_id}">View JSON</a>` : ''}
                 ${job.summary_url ? `
-                    <a href="#" class="view-file" data-url="${job.summary_url}" data-type="summary" data-filename="${job.filename}">View summary</a>
+                    <a href="#" class="view-file" data-url="${job.summary_url}" data-type="summary" data-job-id="${job.job_id}">View summary</a>
                     <a href="{{ url_for('summary_disclaimer') }}" class="view-file" data-url="{{ url_for('summary_disclaimer') }}" data-type="summary-disclaimer" data-filename="summary-disclaimer.txt">View summary disclaimer</a>
                 ` : ''}
                 <div class="st-group-label">Download</div>
@@ -1706,7 +1681,7 @@
             const link = e.target.classList.contains('view-file') ? e.target : e.target.closest('.view-file');
             const url = link.dataset.url;
             const type = link.dataset.type;
-            const filename = link.dataset.filename;
+            const filename = link.dataset.filename || jobs[link.dataset.jobId]?.filename;
             openFileModal(url, type, filename);
         }
 
@@ -1781,10 +1756,7 @@
         const job = jobs[jobId];
         if (!job || deletingJobs) return;
 
-        const prompt = job.folder_job
-            ? `Remove "${job.filename}" from the job list?`
-            : `Permanently delete "${job.filename}" and its files from the server?`;
-        if (!confirm(prompt)) return;
+        if (!confirm(`Permanently delete "${job.filename}" and its files in the app's job storage?`)) return;
 
         deletingJobs = true;
         renderJobs();
@@ -1803,25 +1775,22 @@
         if (deletingJobs || !selectedJobs.size) return;
         const ids = [...selectedJobs];
         const description = ids.length === 1 ? 'the selected job' : `all ${ids.length} selected jobs`;
-        if (!confirm(`Permanently delete ${description}?\n\nThis removes the original recordings, source transcripts and matching outputs from the server.`)) return;
+        if (!confirm(`Permanently delete ${description}?\n\nThis removes the recordings, transcripts and outputs in the app's job storage.`)) return;
 
         deletingJobs = true;
         renderJobs();
-        let refreshFolder = false;
         const errors = [];
         for (const id of ids) {
             if (deletedJobIds.has(id)) continue;
             const job = jobs[id];
             try {
                 await requestJobDeletion(id, true);
-                if (job.folder_job) refreshFolder = true;
             } catch (error) {
                 errors.push(`${job.filename}: ${error.message}`);
             }
         }
         deletingJobs = false;
         renderJobs();
-        if (refreshFolder && folderPanel?.open) document.getElementById('folderRefresh').click();
 
         const count = ids.filter(id => deletedJobIds.has(id)).length;
         const result = `${count} selected job${count === 1 ? '' : 's'} deleted.`;
@@ -1910,6 +1879,7 @@
             if (!response.ok) throw new Error(data.error);
 
             if (jobs[jobId] === previousJob) updateJob(data);
+            scheduleFolderJobRefresh();
             reprocessDialog.close();
             showSimpleNotification('Reprocessing started', 'success');
         } catch (error) {

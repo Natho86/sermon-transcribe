@@ -37,7 +37,7 @@ from sermon_transcribe.cleanup import (
     DEFAULT_SUMMARY_MAX_CHARS,
     SUMMARY_DISCLAIMER_TEXT,
 )
-from sermon_transcribe.folder_jobs import FILE_SUFFIXES, FolderJob, file_version, resolve_folder, scan_folder
+from sermon_transcribe.folder_jobs import FolderJob, file_version, resolve_folder, scan_folder
 from sermon_transcribe.io_utils import ensure_dir
 from sermon_transcribe.settings import (
     load_keys,
@@ -178,8 +178,10 @@ def emit_progress(job_id: str, status: str, progress: int, message: str, data: O
     with jobs_lock:
         if job_id in jobs:
             folder_job = jobs[job_id].get("folder_job", False)
-            if folder_job and jobs[job_id]["status"] == "cancelling" and status == "processing":
-                return
+            if folder_job and jobs[job_id]["status"] == "cancelling":
+                if status in ("queued", "processing"):
+                    return
+                status, progress, message = "cancelled", 0, "Job cancelled by user"
             jobs[job_id]["status"] = status
             jobs[job_id]["progress"] = progress
             jobs[job_id]["message"] = message
@@ -826,7 +828,14 @@ def review(job_id: str):
     if job.get("status") != "completed":
         return "Job not completed yet", 400
 
-    return render_template("review.html", job=job)
+    audio = find_original_audio(job_id)
+    return render_template(
+        "review.html",
+        job=job,
+        has_audio=audio is not None,
+        has_wav=audio is not None and audio.suffix.lower() == ".wav",
+        has_segments=bool(job.get("json_path") and Path(job["json_path"]).is_file()),
+    )
 
 
 @app.route("/api/transcript/<job_id>", methods=["GET"])
@@ -1754,88 +1763,72 @@ def list_sermon_folder():
         return jsonify({"error": "The folder could not be read"}), 403
 
 
-def verify_folder_job(plan: FolderJob):
-    if plan.source.parent.resolve() != plan.source.parent:
-        raise RuntimeError("The sermon folder moved or changed")
-    if any(file_version(path) != version for path, version in plan.versions.items()):
-        raise RuntimeError("A source file or output changed. Scan the folder and retry.")
+def verify_folder_source(source: Path, version: tuple[int, int, int, int]):
+    if source.parent.resolve() != source.parent or file_version(source) != version:
+        raise RuntimeError("A sermon source changed. Scan the folder and retry.")
 
 
-def folder_downloads(destinations: dict[str, Path]) -> dict[str, str]:
-    download_types = {"transcript": "text", "timestamps": "json"}
-    return {download_types.get(kind, kind): path.name for kind, path in destinations.items()}
+def copy_folder_source(source: Path, version: tuple[int, int, int, int], destination: Path):
+    """Copy a verified source into job storage without publishing a partial copy."""
+    ensure_dir(destination.parent)
+    with TemporaryDirectory(dir=destination.parent) as tmp:
+        staged = Path(tmp) / destination.name
+        verify_folder_source(source, version)
+        shutil.copyfile(source, staged)
+        verify_folder_source(source, version)
+        staged.replace(destination)
 
 
 def process_folder_jobs(
     batch: list[tuple[str, FolderJob]], action: str, do_cleanup: bool, provider_info: Optional[dict]
 ):
     for job_id, plan in batch:
-        with processing_semaphore:
-            try:
+        try:
+            if is_job_cancelled(job_id):
+                emit_progress(job_id, "cancelled", 0, "Job cancelled by user")
+                continue
+
+            emit_progress(job_id, "processing", 1, "Copying sermon source files...")
+            output_dir = app.config["OUTPUT_FOLDER"] / job_id
+            audio_path = None
+            if plan.audio:
+                audio_path = app.config["UPLOAD_FOLDER"] / job_id / plan.audio.with_suffix(".wav").name
+                copy_folder_source(plan.audio, plan.versions[plan.audio], audio_path)
+
+            if plan.transcript is None:
+                assert audio_path is not None
+                convert = action == "full"
+                process_transcription(
+                    job_id, audio_path, output_dir, do_cleanup, convert, convert, provider_info=provider_info
+                )
+                continue
+
+            text_path = output_dir / plan.transcript.with_suffix(".txt").name
+            copy_folder_source(plan.transcript, plan.versions[plan.transcript], text_path)
+            with jobs_lock:
+                jobs[job_id].update(text_path=str(text_path), text_url=f"/download/{job_id}/text")
+
+            with processing_semaphore:
                 if is_job_cancelled(job_id):
                     emit_progress(job_id, "cancelled", 0, "Job cancelled by user")
                     continue
-                verify_folder_job(plan)
-                with TemporaryDirectory(prefix=".sermon-", dir=plan.source.parent) as tmp:
-                    work = Path(tmp)
-                    staged = {
-                        kind: work / f"{plan.source.stem}{FILE_SUFFIXES[kind]}"
-                        for kind in plan.destinations
-                    }
-                    if action == "summaries":
-                        transcript = strip_disclaimer(plan.source.read_text(encoding="utf-8"))
-                        if not transcript:
-                            raise RuntimeError("The saved transcript is empty")
-                        write_sermon_summary(job_id, transcript, staged["summary"], provider_info)
-                    else:
-                        emit_progress(job_id, "processing", 15, "Transcribing audio...")
-                        result = transcribe_file(
-                            model=model,
-                            source_path=plan.source,
-                            output_dir=work,
-                            config=config,
-                            convert_flac=False,
-                            raw_suffix="_timestamps",
-                        )
-                        if is_job_cancelled(job_id):
-                            emit_progress(job_id, "cancelled", 0, "Job cancelled by user")
-                            continue
-                        if action == "full":
-                            converted = convert_audio(job_id, plan.source, work, True, True)
-                            if not {"m4a_path", "flac_path"} <= converted.keys():
-                                raise RuntimeError("Audio conversion failed")
-                        if do_cleanup:
-                            write_cleaned_outputs(job_id, result.text_path, staged["transcript"], provider_info)
-                        else:
-                            shutil.copyfile(result.text_path, staged["transcript"])
-
-                    if is_job_cancelled(job_id):
-                        emit_progress(job_id, "cancelled", 0, "Job cancelled by user")
-                        continue
-                    if not all(path.is_file() and path.stat().st_size > 0 for path in staged.values()):
-                        raise RuntimeError("Processing did not produce all requested outputs")
-
-                    emit_progress(job_id, "processing", 95, "Saving files to the sermon folder...")
-                    verify_folder_job(plan)
-                    for kind, destination in plan.destinations.items():
-                        if plan.versions[destination] is not None:
-                            shutil.copymode(destination, staged[kind])
-                    with cancelled_lock:
-                        cancelled = job_id in cancelled_jobs
-                        if not cancelled:
-                            for kind, destination in plan.destinations.items():
-                                staged[kind].replace(destination)
-                if cancelled:
-                    emit_progress(job_id, "cancelled", 0, "Job cancelled by user")
-                else:
-                    emit_progress(job_id, "completed", 100, "Files saved to the sermon folder", {
-                        "folder_downloads": folder_downloads(plan.destinations),
-                    })
-            except Exception as exc:
+                transcript = strip_disclaimer(text_path.read_text(encoding="utf-8"))
+                if not transcript:
+                    raise RuntimeError("The saved transcript is empty")
+                summary_path = text_path.with_name(f"{text_path.stem}_summary.txt")
+                write_sermon_summary(job_id, transcript, summary_path, provider_info)
                 if is_job_cancelled(job_id):
                     emit_progress(job_id, "cancelled", 0, "Job cancelled by user")
                 else:
-                    emit_progress(job_id, "failed", 0, f"Error: {exc}")
+                    emit_progress(job_id, "completed", 100, "Processing complete", {
+                        "summary_path": str(summary_path),
+                        "summary_url": f"/download/{job_id}/summary",
+                    })
+        except Exception as exc:
+            if is_job_cancelled(job_id):
+                emit_progress(job_id, "cancelled", 0, "Job cancelled by user")
+            else:
+                emit_progress(job_id, "failed", 0, f"Error: {exc}")
 
 
 @app.post("/api/folder-jobs")
@@ -1865,28 +1858,24 @@ def queue_folder_jobs():
             sermon = sermons.get(name)
             if sermon is None:
                 raise ValueError("The selected files changed. Scan the folder and try again.")
+            transcript = None
             if action == "summaries":
                 if not sermon.has_source("transcript"):
                     raise ValueError(f"{name} needs a saved transcript to regenerate its summary")
-                source = sermon.files["transcript"][0]
-                kinds = ["summary"]
-            else:
-                if not sermon.has_wav():
-                    raise ValueError(f"{name} needs one unambiguous WAV file to retranscribe")
-                source = sermon.files["wav"][0]
-                kinds = ["transcript", "timestamps"]
-                if sermon.files.get("timestamps_text"):
-                    kinds.append("timestamps_text")
-                if do_cleanup:
-                    kinds.append("summary")
-                if action == "full":
-                    kinds.extend(("m4a", "flac"))
-            destinations = {kind: sermon.destination(folder, kind) for kind in kinds}
-            versions = {path: file_version(path) for path in (source, *destinations.values())}
-            if not versions[source] or versions[source][2] == 0:
-                raise ValueError(f"The source file for {name} is missing or empty")
+                transcript = sermon.files["transcript"][0]
+            audio = sermon.files["wav"][0] if sermon.has_wav() else None
+            if transcript is None and audio is None:
+                raise ValueError(f"{name} needs one unambiguous WAV file to retranscribe")
+
+            versions = {}
+            for path in (audio, transcript):
+                if path is not None:
+                    version = file_version(path)
+                    if version is None or version[2] == 0:
+                        raise ValueError(f"{path.name} is missing or empty")
+                    versions[path] = version
             key = (folder.relative_to(root) / name).as_posix()
-            plans.append(FolderJob(key, source, destinations, versions))
+            plans.append(FolderJob(key, audio, transcript, versions))
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     except FileNotFoundError as exc:
@@ -1921,6 +1910,8 @@ def queue_folder_jobs():
                 "message": "Folder job queued",
                 "created_at": now,
                 "updated_at": now,
+                "cleanup": do_cleanup,
+                "language": config.language,
             }
             jobs[job_id] = job
             queued.append(job.copy())
@@ -1964,38 +1955,6 @@ def download_zip(paths: list[Path], filename: str):
         raise
 
 
-def download_folder_job(job: dict, file_type: str):
-    downloads = job.get("folder_downloads", {})
-    if job["status"] != "completed" or (file_type != "all" and file_type not in downloads):
-        return jsonify({"error": "File not found"}), 404
-
-    job_key = Path(job["folder_key"])
-    try:
-        _, folder = configured_folder(job_key.parent.as_posix())
-    except (ValueError, OSError):
-        return jsonify({"error": "Sermon folder unavailable"}), 404
-
-    names = downloads.values() if file_type == "all" else [downloads[file_type]]
-    paths = []
-    for name in names:
-        path = folder / name
-        try:
-            if file_version(path) is not None:
-                paths.append(path)
-        except (ValueError, OSError):
-            continue
-    if not paths:
-        return jsonify({"error": "No job files found in the sermon folder"}), 404
-
-    try:
-        if file_type == "all":
-            return download_zip(paths, f"{job_key.name}_complete.zip")
-        mimetype = {"m4a": "audio/mp4", "flac": "audio/flac"}.get(file_type)
-        return send_file(paths[0], as_attachment=True, mimetype=mimetype)
-    except OSError:
-        return jsonify({"error": "Could not read the job files in the sermon folder"}), 404
-
-
 @app.route("/download/<job_id>/<file_type>")
 @login_required
 def download(job_id: str, file_type: str):
@@ -2005,9 +1964,6 @@ def download(job_id: str, file_type: str):
 
     if not job:
         return jsonify({"error": "Job not found"}), 404
-
-    if job.get("folder_job"):
-        return download_folder_job(job, file_type)
 
     if file_type == "text" and "text_path" in job:
         return send_file(job["text_path"], as_attachment=True)
@@ -2024,7 +1980,7 @@ def download(job_id: str, file_type: str):
             Path(job[key]) for key in ("text_path", "json_path", "summary_path", "m4a_path", "flac_path")
             if key in job and Path(job[key]).exists()
         ]
-        base_name = job.get("filename", "transcription")
+        base_name = Path(job.get("filename", "transcription")).name
         if base_name.endswith(('.mp3', '.wav', '.m4a', '.flac')):
             base_name = Path(base_name).stem
         try:
@@ -2062,8 +2018,6 @@ def cancel_job(job_id: str):
         if job["status"] not in ["queued", "processing"]:
             return jsonify({"error": f"Cannot cancel job with status: {job['status']}"}), 400
         if job.get("folder_job"):
-            if job["progress"] >= 95:
-                return jsonify({"error": "This job is already saving its outputs"}), 409
             with cancelled_lock:
                 cancelled_jobs.add(job_id)
             job.update(status="cancelling", message="Cancelling job...", updated_at=datetime.utcnow().isoformat())
@@ -2082,7 +2036,7 @@ def cancel_job(job_id: str):
 @app.route("/job/<job_id>", methods=["DELETE"])
 @login_required
 def delete_job(job_id: str):
-    """Delete an uploaded job, or remove a folder job and optionally its sermon."""
+    """Delete the job and its app-managed files."""
     finished = ("completed", "failed", "cancelled")
     delete_files = request.args.get("delete_files") == "true"
     with jobs_lock:
@@ -2094,43 +2048,20 @@ def delete_job(job_id: str):
         if delete_files and job["status"] != "completed":
             return jsonify({"error": "Choose a completed job to delete its sermon"}), 409
 
-        removed_ids = [job_id]
-        message = "Job deleted successfully"
         try:
-            if job.get("folder_job"):
-                message = "Folder job removed"
-                if delete_files:
-                    removed_ids = [
-                        other_id for other_id, other in jobs.items()
-                        if other.get("folder_key") == job["folder_key"]
-                    ]
-                    if any(jobs[other_id]["status"] not in finished for other_id in removed_ids):
-                        return jsonify({"error": "Wait for all jobs for this sermon to finish"}), 409
-
-                    key = Path(job["folder_key"])
-                    _, folder = configured_folder(key.parent.as_posix())
-                    _, sermons = scan_folder(folder, include_outputs_only=True)
-                    sermon = sermons.get(key.name)
-                    if sermon:
-                        for paths in sermon.files.values():
-                            for path in paths:
-                                path.unlink(missing_ok=True)
-                    message = "Sermon and server files deleted"
-            else:
-                for setting in ("OUTPUT_FOLDER", "UPLOAD_FOLDER"):
-                    directory = app.config[setting] / job_id
-                    if directory.exists() or directory.is_symlink():
-                        shutil.rmtree(directory)
-        except (OSError, ValueError):
+            for setting in ("OUTPUT_FOLDER", "UPLOAD_FOLDER"):
+                directory = app.config[setting] / job_id
+                if directory.exists() or directory.is_symlink():
+                    shutil.rmtree(directory)
+        except OSError:
             app.logger.exception("Could not delete files for job %s", job_id)
             return jsonify({"error": "Could not delete all server files. Try deleting the job again."}), 500
 
-        for removed_id in removed_ids:
-            del jobs[removed_id]
+        del jobs[job_id]
         with cancelled_lock:
-            cancelled_jobs.difference_update(removed_ids)
+            cancelled_jobs.discard(job_id)
 
-    return jsonify({"success": True, "message": message, "removed_job_ids": removed_ids})
+    return jsonify({"success": True, "message": "Job deleted successfully", "removed_job_ids": [job_id]})
 
 
 def load_existing_jobs():
