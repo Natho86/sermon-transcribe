@@ -58,7 +58,7 @@ def resolve_folder(root: Path, relative: str) -> Path:
     return folder
 
 
-def scan_folder(folder: Path) -> tuple[list[str], dict[str, FolderSermon]]:
+def scan_folder(folder: Path, *, include_outputs_only: bool = False) -> tuple[list[str], dict[str, FolderSermon]]:
     directories = []
     sermons: dict[str, FolderSermon] = {}
     for path in sorted(folder.iterdir(), key=lambda path: (path.name.casefold(), path.name)):
@@ -79,7 +79,7 @@ def scan_folder(folder: Path) -> tuple[list[str], dict[str, FolderSermon]]:
     sermons = {
         stem: sermon
         for stem, sermon in sorted(sermons.items())
-        if "wav" in sermon.files or "transcript" in sermon.files
+        if include_outputs_only or "wav" in sermon.files or "transcript" in sermon.files
     }
     return directories, sermons
 

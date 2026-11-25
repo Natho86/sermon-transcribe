@@ -158,8 +158,11 @@
         display: flex; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 14px; flex-wrap: wrap;
     }
     .st-jobs-header h2 { font-size: 16px; font-weight: 700; margin: 0; }
-    .st-jobs-controls { display: flex; gap: 8px; }
-    .st-jobs-controls input { width: 180px; }
+    .st-jobs-controls, .st-jobs-selection { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .st-jobs-controls .st-input { width: 180px; }
+    .st-jobs-selection label { display: flex; gap: 6px; align-items: center; font-size: 13px; }
+    .st-jobs-selection input, .st-job-selection input { margin: 0; accent-color: var(--accent); cursor: pointer; }
+    .st-jobs-selection .st-delete-btn:disabled { opacity: 0.5; cursor: default; }
 
     .st-jobs-card {
         background: var(--surface); border: 1px solid var(--border); border-radius: var(--radiusLg);
@@ -241,7 +244,7 @@
         .st-grid { grid-template-columns: 1fr; }
         .st-jobs-header { flex-direction: column; align-items: stretch; }
         .st-jobs-controls { flex-direction: column; }
-        .st-jobs-controls input, .st-jobs-controls select { width: 100%; }
+        .st-jobs-controls .st-input, .st-jobs-controls select { width: 100%; }
         .st-jobs-table-wrap { display: none; }
         .st-jobs-mobile { display: block; }
     }
@@ -598,6 +601,9 @@
 
     let selectedFiles = [];
     let jobs = {};
+    const selectedJobs = new Set();
+    const deletedJobIds = new Set();
+    let deletingJobs = false;
     let uploadMode = 'audio'; // 'audio' or 'transcript'
     let isUploading = false;
     let uploadQueue = [];
@@ -1347,6 +1353,7 @@
     }
 
     function updateJob(data) {
+        if (deletedJobIds.has(data.job_id)) return;
         jobs[data.job_id] = { ...jobs[data.job_id], ...data };
         renderJobs();
     }
@@ -1360,10 +1367,17 @@
     }
 
     function renderJobs() {
+        for (const id of selectedJobs) {
+            if (jobs[id]?.status !== 'completed') selectedJobs.delete(id);
+        }
         if (Object.keys(jobs).length === 0) {
             jobList.innerHTML = '';
             return;
         }
+        const search = document.getElementById('jobSearch');
+        const query = search?.value || '';
+        const caret = document.activeElement === search && search ? search.selectionStart : null;
+        const filter = document.getElementById('jobFilter')?.value || 'all';
 
         // Sort jobs by created_at, newest first
         const sortedJobs = Object.values(jobs).sort((a, b) => {
@@ -1385,12 +1399,17 @@
                             <option value="cancelled">Cancelled</option>
                         </select>
                     </div>
+                    <div class="st-jobs-selection">
+                        <label><input type="checkbox" id="selectVisibleJobs"> Select all visible completed jobs</label>
+                        <button type="button" class="st-delete-btn" id="deleteSelectedJobs" disabled>Delete selected</button>
+                        <small id="hiddenJobSelection" aria-live="polite"></small>
+                    </div>
                 </div>
                 <div class="st-jobs-card">
                     <div class="st-jobs-table-wrap">
                         <table class="st-jobs-table">
                             <thead>
-                                <tr><th>File</th><th>Status</th><th>Size</th><th>Uploaded</th><th></th></tr>
+                                <tr><th aria-label="Select job"></th><th>File</th><th>Status</th><th>Size</th><th>Uploaded</th><th></th></tr>
                             </thead>
                             <tbody id="jobsTbody"></tbody>
                         </table>
@@ -1405,7 +1424,12 @@
             tbody.appendChild(createJobRow(job));
             mobile.appendChild(createJobCard(job));
         });
-        setupJobsControls(sortedJobs);
+        setupJobsControls(sortedJobs, query, filter);
+        if (caret !== null) {
+            const field = document.getElementById('jobSearch');
+            field.focus();
+            field.setSelectionRange(caret, caret);
+        }
     }
 
     function jobActionsDropdown(job, idPrefix, content) {
@@ -1458,8 +1482,7 @@
                 ${job.flac_url ? `<a href="${job.flac_url}" download>Download FLAC</a>` : ''}
                 <a href="#" class="download-all-btn" data-job-id="${job.job_id}">Download all files</a>
                 <button class="reprocess-btn" data-job-id="${job.job_id}">Reprocess</button>
-                <div class="st-group-label">Danger zone</div>
-                <button class="delete-btn st-danger" data-job-id="${job.job_id}">Delete job</button>
+                <button class="delete-btn st-danger" data-job-id="${job.job_id}">Delete sermon</button>
             `);
         } else if (job.status === 'queued' || job.status === 'processing') {
             return `<button class="st-cancel-btn cancel-btn" data-job-id="${job.job_id}">Cancel</button>`;
@@ -1487,6 +1510,7 @@
     function createJobRow(job) {
         const jobEl = document.createElement('tr');
         jobEl.innerHTML = `
+            <td class="st-job-selection"></td>
             <td class="st-job-filename"></td>
             <td>
                 <span class="st-pill status-${job.status}">${statusLabel(job.status)}</span>
@@ -1511,6 +1535,7 @@
                     <div class="st-job-filename"></div>
                     <div class="st-job-card-meta">${job.duration || '-'} · ${new Date(job.created_at).toLocaleString()}</div>
                 </div>
+                <div class="st-job-selection"></div>
             </div>
             <div class="st-job-card-status">
                 <span class="st-pill status-${job.status}">${statusLabel(job.status)}</span>
@@ -1526,26 +1551,73 @@
         element.querySelector('.st-job-filename').textContent = job.filename || '';
         const message = element.querySelector('.st-job-message');
         if (message) message.textContent = job.message || '';
+        if (job.status === 'completed') {
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.dataset.selectJob = job.job_id;
+            checkbox.setAttribute('aria-label', `Select ${job.filename}`);
+            element.querySelector('.st-job-selection').append(checkbox);
+        }
     }
 
-    function setupJobsControls(sortedJobs) {
+    function setupJobsControls(sortedJobs, query, filter) {
         const searchEl = document.getElementById('jobSearch');
         const filterEl = document.getElementById('jobFilter');
+        const selectAll = document.getElementById('selectVisibleJobs');
+        const deleteSelected = document.getElementById('deleteSelectedJobs');
+        const hiddenSelection = document.getElementById('hiddenJobSelection');
+        const rows = document.querySelectorAll('#jobsTbody tr');
+        const cards = document.querySelectorAll('#jobsMobile .st-job-card');
+        const checkboxes = jobList.querySelectorAll('[data-select-job]');
+        let visibleIds = [];
+        searchEl.value = query;
+        filterEl.value = filter;
+
+        const updateSelection = () => {
+            for (const checkbox of checkboxes) {
+                checkbox.checked = selectedJobs.has(checkbox.dataset.selectJob);
+                checkbox.disabled = deletingJobs;
+            }
+            const count = visibleIds.filter(id => selectedJobs.has(id)).length;
+            selectAll.checked = count > 0 && count === visibleIds.length;
+            selectAll.indeterminate = count > 0 && !selectAll.checked;
+            selectAll.disabled = deletingJobs || visibleIds.length === 0;
+            deleteSelected.disabled = deletingJobs || selectedJobs.size === 0;
+            deleteSelected.textContent = selectedJobs.size ? `Delete selected (${selectedJobs.size})` : 'Delete selected';
+            const hiddenCount = selectedJobs.size - count;
+            hiddenSelection.textContent = hiddenCount ? `${hiddenCount} selected outside this filter` : '';
+        };
         const applyFilters = () => {
-            const q = (searchEl.value || '').toLowerCase();
+            const q = searchEl.value.toLowerCase();
             const status = filterEl.value;
-            document.querySelectorAll('#jobsTbody tr').forEach((row, idx) => {
-                const job = sortedJobs[idx];
-                const matchQ = job.filename.toLowerCase().includes(q);
+            visibleIds = [];
+            sortedJobs.forEach((job, idx) => {
+                const matchQ = (job.filename || '').toLowerCase().includes(q);
                 const matchS = status === 'all' || job.status === status;
                 const visible = matchQ && matchS;
-                row.style.display = visible ? '' : 'none';
-                const card = document.querySelectorAll('#jobsMobile .st-job-card')[idx];
-                if (card) card.style.display = visible ? '' : 'none';
+                rows[idx].style.display = cards[idx].style.display = visible ? '' : 'none';
+                if (visible && job.status === 'completed') visibleIds.push(job.job_id);
             });
+            updateSelection();
         };
         searchEl.addEventListener('input', applyFilters);
         filterEl.addEventListener('change', applyFilters);
+        selectAll.addEventListener('change', () => {
+            for (const id of visibleIds) {
+                if (selectAll.checked) selectedJobs.add(id);
+                else selectedJobs.delete(id);
+            }
+            updateSelection();
+        });
+        jobList.querySelector('.st-jobs-card').addEventListener('change', event => {
+            const id = event.target.dataset.selectJob;
+            if (!id) return;
+            if (event.target.checked) selectedJobs.add(id);
+            else selectedJobs.delete(id);
+            updateSelection();
+        });
+        deleteSelected.addEventListener('click', deleteSelectedJobs);
+        applyFilters();
     }
 
     // Modal functions
@@ -1639,10 +1711,9 @@
         }
 
         // Handle delete button clicks
-        if (e.target.classList.contains('delete-btn') || e.target.closest('.delete-btn')) {
-            const btn = e.target.classList.contains('delete-btn') ? e.target : e.target.closest('.delete-btn');
-            const jobId = btn.dataset.jobId;
-            deleteJob(jobId);
+        const deleteBtn = e.target.closest('.delete-btn');
+        if (deleteBtn) {
+            deleteJob(deleteBtn.dataset.jobId);
         }
 
         // Handle cancel button clicks
@@ -1693,37 +1764,71 @@
         }
     }
 
-    // Delete job function
+    async function requestJobDeletion(jobId, deleteFiles = false) {
+        const query = deleteFiles ? '?delete_files=true' : '';
+        const response = await fetch(`/job/${encodeURIComponent(jobId)}${query}`, { method: 'DELETE' });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error);
+        for (const id of data.removed_job_ids) {
+            deletedJobIds.add(id);
+            selectedJobs.delete(id);
+            delete jobs[id];
+        }
+        return data;
+    }
+
     async function deleteJob(jobId) {
         const job = jobs[jobId];
-        if (!job) return;
+        if (!job || deletingJobs) return;
 
         const prompt = job.folder_job
             ? `Remove "${job.filename}" from the job list?`
-            : `Are you sure you want to delete "${job.filename}"?\n\nThis will permanently remove all files associated with this job.`;
-        if (!confirm(prompt)) {
-            return;
-        }
+            : `Permanently delete "${job.filename}" and its files from the server?`;
+        if (!confirm(prompt)) return;
 
+        deletingJobs = true;
+        renderJobs();
         try {
-            const response = await fetch(`/job/${jobId}`, {
-                method: 'DELETE'
-            });
-
-            const data = await response.json();
-
-            if (response.ok) {
-                // Remove from local jobs object
-                delete jobs[jobId];
-                renderJobs();
-
-                // Show success message
-                showSimpleNotification(job.folder_job ? 'Folder job removed' : 'Job deleted successfully', 'success');
-            } else {
-                alert('Failed to delete job: ' + data.error);
-            }
+            const data = await requestJobDeletion(jobId);
+            showSimpleNotification(data.message, 'success');
         } catch (error) {
-            alert('Error deleting job: ' + error.message);
+            showSimpleNotification('Could not delete job. ' + error.message, 'error');
+        } finally {
+            deletingJobs = false;
+            renderJobs();
+        }
+    }
+
+    async function deleteSelectedJobs() {
+        if (deletingJobs || !selectedJobs.size) return;
+        const ids = [...selectedJobs];
+        const description = ids.length === 1 ? 'the selected job' : `all ${ids.length} selected jobs`;
+        if (!confirm(`Permanently delete ${description}?\n\nThis removes the original recordings, source transcripts and matching outputs from the server.`)) return;
+
+        deletingJobs = true;
+        renderJobs();
+        let refreshFolder = false;
+        const errors = [];
+        for (const id of ids) {
+            if (deletedJobIds.has(id)) continue;
+            const job = jobs[id];
+            try {
+                await requestJobDeletion(id, true);
+                if (job.folder_job) refreshFolder = true;
+            } catch (error) {
+                errors.push(`${job.filename}: ${error.message}`);
+            }
+        }
+        deletingJobs = false;
+        renderJobs();
+        if (refreshFolder && folderPanel?.open) document.getElementById('folderRefresh').click();
+
+        const count = ids.filter(id => deletedJobIds.has(id)).length;
+        const result = `${count} selected job${count === 1 ? '' : 's'} deleted.`;
+        if (errors.length) {
+            showSimpleNotification(`${result} ${errors.length} could not be deleted. ${errors[0]}`, 'error');
+        } else {
+            showSimpleNotification(result, 'success');
         }
     }
 

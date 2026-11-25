@@ -2082,41 +2082,55 @@ def cancel_job(job_id: str):
 @app.route("/job/<job_id>", methods=["DELETE"])
 @login_required
 def delete_job(job_id: str):
-    """Delete a job and all its associated files."""
+    """Delete an uploaded job, or remove a folder job and optionally its sermon."""
+    finished = ("completed", "failed", "cancelled")
+    delete_files = request.args.get("delete_files") == "true"
     with jobs_lock:
         job = jobs.get(job_id)
         if not job:
             return jsonify({"error": "Job not found"}), 404
-        if job.get("folder_job"):
-            if job["status"] not in ("completed", "failed", "cancelled"):
-                return jsonify({"error": "Wait for this folder job to finish"}), 409
-            del jobs[job_id]
-            with cancelled_lock:
-                cancelled_jobs.discard(job_id)
-            return jsonify({"success": True, "message": "Folder job removed"})
+        if job["status"] not in finished:
+            return jsonify({"error": "Wait for this job to finish"}), 409
+        if delete_files and job["status"] != "completed":
+            return jsonify({"error": "Choose a completed job to delete its sermon"}), 409
 
-    try:
-        # Delete output directory
-        output_dir = app.config["OUTPUT_FOLDER"] / job_id
-        if output_dir.exists():
-            shutil.rmtree(output_dir)
+        removed_ids = [job_id]
+        message = "Job deleted successfully"
+        try:
+            if job.get("folder_job"):
+                message = "Folder job removed"
+                if delete_files:
+                    removed_ids = [
+                        other_id for other_id, other in jobs.items()
+                        if other.get("folder_key") == job["folder_key"]
+                    ]
+                    if any(jobs[other_id]["status"] not in finished for other_id in removed_ids):
+                        return jsonify({"error": "Wait for all jobs for this sermon to finish"}), 409
 
-        # Delete upload directory
-        upload_dir = app.config["UPLOAD_FOLDER"] / job_id
-        if upload_dir.exists():
-            shutil.rmtree(upload_dir)
+                    key = Path(job["folder_key"])
+                    _, folder = configured_folder(key.parent.as_posix())
+                    _, sermons = scan_folder(folder, include_outputs_only=True)
+                    sermon = sermons.get(key.name)
+                    if sermon:
+                        for paths in sermon.files.values():
+                            for path in paths:
+                                path.unlink(missing_ok=True)
+                    message = "Sermon and server files deleted"
+            else:
+                for setting in ("OUTPUT_FOLDER", "UPLOAD_FOLDER"):
+                    directory = app.config[setting] / job_id
+                    if directory.exists() or directory.is_symlink():
+                        shutil.rmtree(directory)
+        except (OSError, ValueError):
+            app.logger.exception("Could not delete files for job %s", job_id)
+            return jsonify({"error": "Could not delete all server files. Try deleting the job again."}), 500
 
-        # Remove from jobs dictionary
-        with jobs_lock:
-            del jobs[job_id]
-
-        # Remove from cancelled set if present
+        for removed_id in removed_ids:
+            del jobs[removed_id]
         with cancelled_lock:
-            cancelled_jobs.discard(job_id)
+            cancelled_jobs.difference_update(removed_ids)
 
-        return jsonify({"success": True, "message": "Job deleted successfully"})
-    except Exception as exc:
-        return jsonify({"error": f"Failed to delete job: {str(exc)}"}), 500
+    return jsonify({"success": True, "message": message, "removed_job_ids": removed_ids})
 
 
 def load_existing_jobs():
