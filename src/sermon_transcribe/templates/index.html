@@ -162,7 +162,7 @@
     .st-jobs-controls .st-input { width: 180px; }
     .st-jobs-selection label { display: flex; gap: 6px; align-items: center; font-size: 13px; }
     .st-jobs-selection input, .st-job-selection input { margin: 0; accent-color: var(--accent); cursor: pointer; }
-    .st-jobs-selection .st-delete-btn:disabled { opacity: 0.5; cursor: default; }
+    .st-jobs-selection button:disabled { opacity: 0.5; cursor: default; }
 
     .st-jobs-card {
         background: var(--surface); border: 1px solid var(--border); border-radius: var(--radiusLg);
@@ -221,12 +221,13 @@
     .st-actions-dropdown-content button:hover { background: var(--surface2); }
     .st-actions-dropdown-content button.st-danger { color: var(--statusBad); }
 
-    .st-cancel-btn, .st-reprocess-btn, .st-delete-btn {
+    .st-cancel-btn, .st-reprocess-btn, .st-delete-btn, .st-download-btn {
         padding: 6px 12px; border-radius: 7px; font-size: 12px; font-weight: 600; cursor: pointer;
         border: 1px solid var(--border); background: var(--surface); color: var(--text2);
         transition: background-color 160ms ease;
     }
-    .st-cancel-btn:hover, .st-reprocess-btn:hover { background: var(--surface2); }
+    .st-cancel-btn:hover, .st-reprocess-btn:hover, .st-download-btn:hover { background: var(--surface2); }
+    .st-download-btn { display: inline-block; text-decoration: none; white-space: nowrap; }
     .st-delete-btn { color: var(--statusBad); }
     .st-delete-btn:hover { background: var(--statusBadBg); }
 
@@ -287,7 +288,6 @@
         border-top-color: var(--accent); border-radius: 50%; animation: st-spin 0.8s linear infinite;
     }
     @keyframes st-spin { to { transform: rotate(360deg); } }
-    @keyframes st-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 </style>
 {% endblock %}
 {% block content %}
@@ -610,6 +610,7 @@
     let selectedFiles = [];
     let jobs = {};
     const selectedJobs = new Set();
+    const maxBulkDownloadJobs = {{ max_bulk_download_jobs | tojson }};
     const deletedJobIds = new Set();
     let deletingJobs = false;
     let uploadMode = 'audio'; // 'audio' or 'transcript'
@@ -1423,7 +1424,9 @@
                     </div>
                     <div class="st-jobs-selection">
                         <label><input type="checkbox" id="selectVisibleJobs"> Select all visible completed jobs</label>
+                        <button type="button" class="st-download-btn" id="downloadSelectedJobs" aria-describedby="downloadSelectionLimit" disabled>Download selected</button>
                         <button type="button" class="st-delete-btn" id="deleteSelectedJobs" disabled>Delete selected</button>
+                        <small id="downloadSelectionLimit" aria-live="polite"></small>
                         <small id="hiddenJobSelection" aria-live="polite"></small>
                     </div>
                 </div>
@@ -1465,7 +1468,8 @@
 
     function jobActionsMarkup(job, idPrefix) {
         if (job.status === 'completed') {
-            return jobActionsDropdown(job, idPrefix, `
+            const downloadUrl = `/download/${encodeURIComponent(job.job_id)}/all`;
+            return `<a class="st-download-btn" href="${downloadUrl}" download>Download all</a>` + jobActionsDropdown(job, idPrefix, `
                 <div class="st-group-label">View</div>
                 <a href="/review/${job.job_id}">Review &amp; edit</a>
                 <a href="#" class="view-file" data-url="/download/${job.job_id}/text" data-type="text" data-job-id="${job.job_id}">View transcript</a>
@@ -1477,7 +1481,7 @@
                 <a href="/download/${job.job_id}/text" download>Download transcript</a>
                 ${job.m4a_url ? `<a href="${job.m4a_url}" download>Download M4A</a>` : ''}
                 ${job.flac_url ? `<a href="${job.flac_url}" download>Download FLAC</a>` : ''}
-                <a href="#" class="download-all-btn" data-job-id="${job.job_id}">Download all files</a>
+                <a href="${downloadUrl}" download>Download all files</a>
                 <button class="reprocess-btn" data-job-id="${job.job_id}">Reprocess</button>
                 <button class="delete-btn st-danger" data-job-id="${job.job_id}">Delete sermon</button>
             `);
@@ -1538,7 +1542,7 @@
                 <span class="st-pill status-${job.status}">${statusLabel(job.status)}</span>
                 ${progressMarkup(job, '100%')}
             </div>
-            <div class="st-job-card-actions">${jobActionsMarkup(job, 'card-actions')}</div>
+            <div class="st-job-card-actions st-job-actions">${jobActionsMarkup(job, 'card-actions')}</div>
         `;
         setJobText(card, job);
         return card;
@@ -1561,7 +1565,9 @@
         const searchEl = document.getElementById('jobSearch');
         const filterEl = document.getElementById('jobFilter');
         const selectAll = document.getElementById('selectVisibleJobs');
+        const downloadSelected = document.getElementById('downloadSelectedJobs');
         const deleteSelected = document.getElementById('deleteSelectedJobs');
+        const downloadLimit = document.getElementById('downloadSelectionLimit');
         const hiddenSelection = document.getElementById('hiddenJobSelection');
         const rows = document.querySelectorAll('#jobsTbody tr');
         const cards = document.querySelectorAll('#jobsMobile .st-job-card');
@@ -1579,6 +1585,10 @@
             selectAll.checked = count > 0 && count === visibleIds.length;
             selectAll.indeterminate = count > 0 && !selectAll.checked;
             selectAll.disabled = deletingJobs || visibleIds.length === 0;
+            const overDownloadLimit = selectedJobs.size > maxBulkDownloadJobs;
+            downloadSelected.disabled = deletingJobs || selectedJobs.size === 0 || overDownloadLimit;
+            downloadSelected.textContent = selectedJobs.size ? `Download selected (${selectedJobs.size})` : 'Download selected';
+            downloadLimit.textContent = overDownloadLimit ? `Select up to ${maxBulkDownloadJobs} jobs per download.` : '';
             deleteSelected.disabled = deletingJobs || selectedJobs.size === 0;
             deleteSelected.textContent = selectedJobs.size ? `Delete selected (${selectedJobs.size})` : 'Delete selected';
             const hiddenCount = selectedJobs.size - count;
@@ -1612,6 +1622,14 @@
             if (event.target.checked) selectedJobs.add(id);
             else selectedJobs.delete(id);
             updateSelection();
+        });
+        downloadSelected.addEventListener('click', () => {
+            const params = new URLSearchParams();
+            for (const id of selectedJobs) params.append('job_id', id);
+            const link = document.createElement('a');
+            link.href = `{{ url_for('download_selected') }}?${params}`;
+            link.download = '';
+            link.click();
         });
         deleteSelected.addEventListener('click', deleteSelectedJobs);
         applyFilters();
@@ -1722,13 +1740,6 @@
         const reprocessBtn = e.target.closest('.reprocess-btn');
         if (reprocessBtn) {
             openReprocessDialog(reprocessBtn.dataset.jobId);
-        }
-
-        if (e.target.classList.contains('download-all-btn') || e.target.closest('.download-all-btn')) {
-            e.preventDefault();
-            const btn = e.target.classList.contains('download-all-btn') ? e.target : e.target.closest('.download-all-btn');
-            const jobId = btn.dataset.jobId;
-            downloadAllFiles(jobId, btn);
         }
     });
 
@@ -1914,74 +1925,6 @@
             updateReprocessOptions();
         }
     });
-
-    // Download all files function
-    async function downloadAllFiles(jobId, btnElement) {
-        const job = jobs[jobId];
-        if (!job) return;
-
-        // Store original button content
-        const originalContent = btnElement.innerHTML;
-
-        // Show loading state
-        btnElement.innerHTML = 'Preparing files...';
-        btnElement.style.pointerEvents = 'none';
-        btnElement.style.opacity = '0.7';
-
-        // Create a loading notification
-        const loadingNotif = document.createElement('div');
-        loadingNotif.style.cssText = `
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            padding: 28px 36px;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 14px;
-            box-shadow: var(--shadowMd);
-            z-index: 10000;
-            color: var(--text);
-            font-weight: 600;
-            text-align: center;
-            min-width: 280px;
-        `;
-        loadingNotif.innerHTML = `
-            <div style="font-size: 18px; margin-bottom: 10px;">Preparing download</div>
-            <div style="font-size: 13px; color: var(--textMuted); font-weight: 400;">Creating zip file with all job files...</div>
-            <div style="margin-top: 14px;">
-                <div style="width: 100%; height: 4px; background: var(--surface2); border-radius: 2px; overflow: hidden;">
-                    <div style="width: 100%; height: 100%; background: var(--accent); animation: st-pulse 1.5s ease-in-out infinite;"></div>
-                </div>
-            </div>
-        `;
-        document.body.appendChild(loadingNotif);
-
-        try {
-            // Create a hidden link and trigger download
-            const link = document.createElement('a');
-            link.href = `/download/${jobId}/all`;
-            link.download = '';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-
-            // Wait a bit before removing notification to ensure download started
-            setTimeout(() => {
-                document.body.removeChild(loadingNotif);
-                btnElement.innerHTML = originalContent;
-                btnElement.style.pointerEvents = '';
-                btnElement.style.opacity = '';
-                showSimpleNotification('Download started successfully', 'success');
-            }, 2000);
-        } catch (error) {
-            document.body.removeChild(loadingNotif);
-            btnElement.innerHTML = originalContent;
-            btnElement.style.pointerEvents = '';
-            btnElement.style.opacity = '';
-            showSimpleNotification('Failed to start download: ' + error.message, 'error');
-        }
-    }
 
     // Simple notification function
     function showSimpleNotification(message, type = 'success') {

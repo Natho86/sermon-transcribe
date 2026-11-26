@@ -55,6 +55,8 @@ For audio uploads, select **Transcribe only** to generate a raw transcript and t
 
 Under **Jobs**, tick the completed sermons you want to delete and choose **Delete selected**. **Select all visible completed jobs** selects the current search and filter results. Selections are kept when you change filters. Confirming deletion removes each job's uploaded or imported files and its outputs from the server.
 
+Use **Download all** on a completed job to save its output files as a ZIP. To download several sermons in one ZIP, tick up to 10 completed jobs and choose **Download selected**. Each sermon has its own folder inside the archive.
+
 ### Process a server folder
 
 To enable **Process a folder**, mount your staging directory into the app container and set `SERMON_FOLDER_ROOT` to its path inside the container. A read-only mount is sufficient. For example, mount `/mnt/user/sermons/staging` as `/sermons` on Unraid and set `SERMON_FOLDER_ROOT=/sermons`. A Docker Compose override can supply the same settings:

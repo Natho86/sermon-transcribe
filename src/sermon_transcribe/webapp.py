@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory, TemporaryFile
 from typing import Dict, Optional
-from zipfile import ZIP_DEFLATED, ZipFile
+from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
 
 from flask import Flask, jsonify, render_template, request, send_file, redirect, url_for, session
 from flask_socketio import SocketIO, emit
@@ -118,6 +118,7 @@ socketio = SocketIO(
 # Global state for jobs
 jobs: Dict[str, dict] = {}
 jobs_lock = threading.Lock()
+MAX_BULK_DOWNLOAD_JOBS = 10
 
 # Cancelled jobs tracking
 cancelled_jobs = set()
@@ -605,7 +606,8 @@ def logout():
 def index():
     """Main upload page."""
     response = app.make_response(render_template(
-        "index.html", folder_processing_enabled=bool(app.config["SERMON_FOLDER_ROOT"])
+        "index.html", folder_processing_enabled=bool(app.config["SERMON_FOLDER_ROOT"]),
+        max_bulk_download_jobs=MAX_BULK_DOWNLOAD_JOBS,
     ))
     # Prevent browser caching to ensure users always get latest version
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
@@ -1854,13 +1856,26 @@ def queue_folder_jobs():
     return jsonify({"jobs": queued}), 202
 
 
-def download_zip(paths: list[Path], filename: str):
+def job_output_paths(job: dict) -> list[Path]:
+    paths = (Path(job[key]) for key in ("text_path", "json_path", "summary_path", "m4a_path", "flac_path") if key in job)
+    return [path for path in paths if path.is_file()]
+
+
+def job_download_name(job: dict) -> str:
+    name = Path(job.get("filename") or "transcription").name
+    return Path(name).stem if name.lower().endswith((".mp3", ".wav", ".m4a", ".flac")) else name
+
+
+def download_zip(entries: list[tuple[Path, str]], filename: str):
     # Keep the archive on disk for large audio files. The response closes it after streaming.
-    archive = TemporaryFile()
+    archive = None
     try:
+        archive = TemporaryFile()
         with ZipFile(archive, "w", ZIP_DEFLATED) as zip_file:
-            for path in paths:
-                zip_file.write(path, path.name)
+            for path, archive_name in entries:
+                # Audio outputs are already compressed.
+                compression = ZIP_STORED if path.suffix.lower() in (".m4a", ".flac") else ZIP_DEFLATED
+                zip_file.write(path, archive_name, compress_type=compression)
         size = archive.tell()
         archive.seek(0)
         response = send_file(
@@ -1869,8 +1884,39 @@ def download_zip(paths: list[Path], filename: str):
         response.content_length = size
         return response.make_conditional(request.environ, accept_ranges=True, complete_length=size)
     except Exception:
-        archive.close()
-        raise
+        if archive is not None:
+            archive.close()
+        app.logger.exception("Could not create download archive %s", filename)
+        return jsonify({"error": "Could not create the download archive."}), 500
+
+
+@app.route("/download/selected")
+@login_required
+def download_selected():
+    job_ids = request.args.getlist("job_id")
+    if not 1 <= len(job_ids) <= MAX_BULK_DOWNLOAD_JOBS:
+        return jsonify({"error": f"Select 1 to {MAX_BULK_DOWNLOAD_JOBS} jobs per download."}), 400
+    if len(set(job_ids)) != len(job_ids):
+        return jsonify({"error": "Select each job only once."}), 400
+
+    with jobs_lock:
+        selected = []
+        for job_id in job_ids:
+            job = jobs.get(job_id)
+            if job is None:
+                return jsonify({"error": "A selected job no longer exists."}), 404
+            if job["status"] != "completed":
+                return jsonify({"error": "Select completed jobs to download."}), 409
+            selected.append(job.copy())
+
+    entries = []
+    for index, job in enumerate(selected, 1):
+        paths = job_output_paths(job)
+        if not paths:
+            return jsonify({"error": "A selected job no longer has files to download."}), 404
+        folder = secure_filename(job_download_name(job)) or "transcription"
+        entries.extend((path, f"{index:02d}-{folder}/{path.name}") for path in paths)
+    return download_zip(entries, "selected-sermons.zip")
 
 
 @app.route("/download/<job_id>/<file_type>")
@@ -1894,17 +1940,10 @@ def download(job_id: str, file_type: str):
     elif file_type == "flac" and "flac_path" in job:
         return send_file(job["flac_path"], as_attachment=True, mimetype="audio/flac")
     elif file_type == "all":
-        paths = [
-            Path(job[key]) for key in ("text_path", "json_path", "summary_path", "m4a_path", "flac_path")
-            if key in job and Path(job[key]).exists()
-        ]
-        base_name = Path(job.get("filename", "transcription")).name
-        if base_name.endswith(('.mp3', '.wav', '.m4a', '.flac')):
-            base_name = Path(base_name).stem
-        try:
-            return download_zip(paths, f"{base_name}_complete.zip")
-        except Exception as e:
-            return jsonify({"error": f"Failed to create zip: {str(e)}"}), 500
+        paths = job_output_paths(job)
+        if not paths:
+            return jsonify({"error": "No files to download."}), 404
+        return download_zip([(path, path.name) for path in paths], f"{job_download_name(job)}_complete.zip")
     else:
         return jsonify({"error": "File not found"}), 404
 
