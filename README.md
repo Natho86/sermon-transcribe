@@ -154,7 +154,7 @@ Outputs:
 - Cleaned transcript: `*.txt` (same base name, no suffix)
 - Summary: `*_summary.txt`
 
-The cleaned transcript and summary each open with an AI disclaimer. In the web app, open a completed job's actions menu and choose **View summary disclaimer** to preview or download the summary disclaimer on its own.
+The cleaned transcript opens with an AI disclaimer. The summary file starts with the overview and includes the Bible references.
 
 Common options:
 - `--output /path/to/cleaned` - Write cleaned files elsewhere

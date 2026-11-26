@@ -29,7 +29,6 @@ from sermon_transcribe.cleanup import (
     DEFAULT_MODEL,
     DEFAULT_OPENROUTER_MODEL,
     DEFAULT_OPENAI_MODEL,
-    SUMMARY_DISCLAIMER_TEXT,
 )
 from sermon_transcribe.folder_jobs import FolderJob, file_version, resolve_folder, scan_folder
 from sermon_transcribe.io_utils import ensure_dir
@@ -515,7 +514,7 @@ def finish_job_summary(job_id: str, text_path: Path, client: AIClient, transcrip
     if is_job_cancelled(job_id):
         return
     summary_path = text_path.with_name(f"{text_path.stem}_summary.txt")
-    write_text(summary_path, apply_disclaimer(summary, SUMMARY_DISCLAIMER_TEXT))
+    write_text(summary_path, summary + "\n")
     checkpoint.unlink(missing_ok=True)
     emit_progress(job_id, "processing", 90, "Summary complete", {
         "summary_path": str(summary_path.absolute()),
@@ -1853,12 +1852,6 @@ def queue_folder_jobs():
                 jobs.pop(job_id, None)
         return jsonify({"error": "Could not start the folder jobs"}), 503
     return jsonify({"jobs": queued}), 202
-
-
-@app.route("/summary-disclaimer")
-@login_required
-def summary_disclaimer():
-    return app.response_class(SUMMARY_DISCLAIMER_TEXT + "\n", mimetype="text/plain")
 
 
 def download_zip(paths: list[Path], filename: str):

@@ -8,13 +8,14 @@ from types import SimpleNamespace
 
 from sermon_transcribe.ai import AIClient, ModelLimits
 from sermon_transcribe.cleanup import (
-    DISCLAIMER_TEXT, SUMMARY_DISCLAIMER_TEXT, normalize_summary, process_transcript_file,
+    DISCLAIMER_TEXT, LEGACY_SHORT_SUMMARY_DISCLAIMER_TEXT, LEGACY_SUMMARY_DISCLAIMER_TEXT,
+    normalize_summary, process_transcript_file,
 )
 
 CASES = (
     (
         """Summary:
-A sermon examining the execution of John the Baptist by Herod Antipas in Matthew 14, contrasting Herod's pride with faithful obedience to Jesus.
+This sermon examines the execution of John the Baptist by Herod Antipas in Matthew 14, contrasting Herod's pride with faithful obedience to Jesus.
 
 Bible references:
 - Matthew 14:1–12
@@ -81,11 +82,25 @@ class GeminiReplayTests(unittest.TestCase):
                               f"sha256={hashlib.sha256(cleaned.encode()).hexdigest()}", logs)
                 self.assertNotIn(cleaned, logs)
                 self.assertEqual(text.read_text(), DISCLAIMER_TEXT + "\n\n" + cleaned + "\n")
-                self.assertEqual(summary.read_text(), SUMMARY_DISCLAIMER_TEXT + "\n\n" + completion + "\n")
+                self.assertEqual(summary.read_text(), completion + "\n")
                 self.assertEqual(len(requests), 2)
                 self.assertTrue(requests[1].endswith(cleaned))
                 self.assertEqual(normalize_summary(completion), completion)
 
+    def test_reusing_saved_summary_removes_legacy_disclaimers_without_ai(self):
+        completion, cleaned = CASES[0]
+        for disclaimer in (LEGACY_SHORT_SUMMARY_DISCLAIMER_TEXT, LEGACY_SUMMARY_DISCLAIMER_TEXT):
+            with self.subTest(disclaimer=disclaimer), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                cleaned_file = root / "sermon.txt"
+                summary = root / "sermon_summary.txt"
+                cleaned_file.write_text(DISCLAIMER_TEXT + "\n\n" + cleaned + "\n")
+                summary.write_text(disclaimer + "\n\n" + completion + "\n")
+                args = SimpleNamespace(skip_existing=True, reprocess=False)
+
+                process_transcript_file(root / "sermon_raw.txt", cleaned_file, summary, args, None)
+
+                self.assertEqual(summary.read_text(), completion + "\n")
 
     def test_chunked_replay_saves_overview_and_references(self):
         completion, cleaned = CASES[1]
@@ -110,7 +125,7 @@ class GeminiReplayTests(unittest.TestCase):
             )
             process_transcript_file(raw, text, summary, args, client)
 
-            self.assertEqual(summary.read_text(), SUMMARY_DISCLAIMER_TEXT + "\n\n" + completion + "\n")
+            self.assertEqual(summary.read_text(), completion + "\n")
             self.assertTrue(all(prompt.startswith("Extract") for prompt in seen[:-1]))
             self.assertIn("consecutive sections", seen[-1])
             self.assertNotIn(cleaned, seen[-1])

@@ -1472,7 +1472,6 @@
                 ${job.json_url ? `<a href="#" class="view-file" data-url="/download/${job.job_id}/json" data-type="json" data-job-id="${job.job_id}">View JSON</a>` : ''}
                 ${job.summary_url ? `
                     <a href="#" class="view-file" data-url="${job.summary_url}" data-type="summary" data-job-id="${job.job_id}">View summary</a>
-                    <a href="{{ url_for('summary_disclaimer') }}" class="view-file" data-url="{{ url_for('summary_disclaimer') }}" data-type="summary-disclaimer" data-filename="summary-disclaimer.txt">View summary disclaimer</a>
                 ` : ''}
                 <div class="st-group-label">Download</div>
                 <a href="/download/${job.job_id}/text" download>Download transcript</a>
@@ -1627,8 +1626,7 @@
         const typeLabels = {
             'text': 'Transcript',
             'json': 'JSON Data',
-            'summary': 'Summary',
-            'summary-disclaimer': 'Summary disclaimer'
+            'summary': 'Summary'
         };
         modalTitle.textContent = `${typeLabels[type] || 'File'} - ${filename}`;
 

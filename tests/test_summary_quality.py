@@ -39,6 +39,7 @@ class PromptTests(unittest.TestCase):
         self.assertTrue(merge.startswith(shared))
         self.assertTrue(merge.endswith("Notes:\nEvidence notes."))
         self.assertIn("suitable for publication", direct)
+        self.assertIn('Prefer phrasing such as "This sermon considers', shared)
         self.assertIn("Consider every section", merge)
         self.assertIn(f"maximum of {cleanup.SUMMARY_MAX_WORDS} words", shared)
         self.assertNotIn("Main points:", shared)
