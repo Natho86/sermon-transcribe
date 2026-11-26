@@ -175,6 +175,12 @@
         letter-spacing: .04em; color: var(--textSubtle); border-bottom: 1px solid var(--border);
     }
     .st-jobs-table th:last-child { text-align: right; }
+    .st-job-sort {
+        display: inline-flex; align-items: center; gap: 5px; padding: 0; border: 0;
+        background: none; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit;
+        cursor: pointer; white-space: nowrap;
+    }
+    .st-job-sort:hover, .st-jobs-table th[aria-sort] .st-job-sort { color: var(--text); }
     .st-jobs-table td { padding: 14px 16px; border-bottom: 1px solid var(--border); font-size: 13px; vertical-align: top; }
     .st-jobs-table tr:last-child td { border-bottom: none; }
     .st-job-filename { font-weight: 600; color: var(--text); }
@@ -610,6 +616,7 @@
     let selectedFiles = [];
     let jobs = {};
     const selectedJobs = new Set();
+    let jobSort = {key: 'uploaded', direction: 'descending'};
     const maxBulkDownloadJobs = {{ max_bulk_download_jobs | tojson }};
     const deletedJobIds = new Set();
     let deletingJobs = false;
@@ -1165,6 +1172,8 @@
             jobs[data.job_id] = {
                 job_id: data.job_id,
                 filename: file.name,
+                size_bytes: file.size,
+                created_at: data.created_at,
                 status: 'queued',
                 progress: 0,
                 message: 'Uploaded successfully'
@@ -1241,6 +1250,8 @@
                     jobs[data.job_id] = {
                         job_id: data.job_id,
                         filename: file.name,
+                        size_bytes: file.size,
+                        created_at: data.created_at,
                         status: data.status || 'queued',
                         progress: data.status === 'completed' ? 100 : 0,
                         message: 'Uploaded successfully'
@@ -1389,6 +1400,36 @@
         return labels[status] || status;
     }
 
+    const jobUploadTime = job => Date.parse(job.created_at);
+    const jobColumns = [
+        {key: 'file', label: 'File', value: job => job.filename || ''},
+        {key: 'status', label: 'Status', value: job => statusLabel(job.status) || ''},
+        {key: 'size', label: 'Size', value: job => job.size_bytes},
+        {key: 'uploaded', label: 'Uploaded', value: jobUploadTime},
+    ];
+    const jobCollator = new Intl.Collator(undefined, {numeric: true, sensitivity: 'base'});
+
+    function compareJobs(value, direction, first, second) {
+        const a = value(first);
+        const b = value(second);
+        const aMissing = typeof a !== 'string' && !Number.isFinite(a);
+        const bMissing = typeof b !== 'string' && !Number.isFinite(b);
+        if (aMissing || bMissing) return Number(aMissing) - Number(bMissing);
+        const order = typeof a === 'string' ? jobCollator.compare(a, b) : a - b;
+        return direction === 'ascending' ? order : -order;
+    }
+
+    function jobSortHeader({key, label}) {
+        const active = jobSort.key === key;
+        const ariaSort = active ? ` aria-sort="${jobSort.direction}"` : '';
+        const arrow = active ? (jobSort.direction === 'ascending' ? '↑' : '↓') : '↕';
+        return `<th scope="col"${ariaSort}>
+            <button type="button" class="st-job-sort" data-job-sort="${key}">
+                ${label} <span aria-hidden="true">${arrow}</span>
+            </button>
+        </th>`;
+    }
+
     function renderJobs() {
         for (const id of selectedJobs) {
             if (jobs[id]?.status !== 'completed') selectedJobs.delete(id);
@@ -1400,12 +1441,14 @@
         const search = document.getElementById('jobSearch');
         const query = search?.value || '';
         const caret = document.activeElement === search && search ? search.selectionStart : null;
+        const focusedSort = document.activeElement?.dataset.jobSort;
         const filter = document.getElementById('jobFilter')?.value || 'all';
 
-        // Sort jobs by created_at, newest first
-        const sortedJobs = Object.values(jobs).sort((a, b) => {
-            return new Date(b.created_at) - new Date(a.created_at);
-        });
+        const {value} = jobColumns.find(column => column.key === jobSort.key);
+        const sortedJobs = Object.values(jobs).sort((a, b) =>
+            compareJobs(value, jobSort.direction, a, b) ||
+            compareJobs(jobUploadTime, 'descending', a, b)
+        );
 
         jobList.innerHTML = `
             <div class="st-jobs-section">
@@ -1434,7 +1477,11 @@
                     <div class="st-jobs-table-wrap">
                         <table class="st-jobs-table">
                             <thead>
-                                <tr><th aria-label="Select job"></th><th>File</th><th>Status</th><th>Size</th><th>Uploaded</th><th></th></tr>
+                                <tr>
+                                    <th scope="col" aria-label="Select job"></th>
+                                    ${jobColumns.map(jobSortHeader).join('')}
+                                    <th scope="col" aria-label="Actions"></th>
+                                </tr>
                             </thead>
                             <tbody id="jobsTbody"></tbody>
                         </table>
@@ -1450,6 +1497,17 @@
             mobile.appendChild(createJobCard(job));
         });
         setupJobsControls(sortedJobs, query, filter);
+        for (const button of jobList.querySelectorAll('[data-job-sort]')) {
+            const key = button.dataset.jobSort;
+            button.addEventListener('click', () => {
+                const direction = jobSort.key === key
+                    ? (jobSort.direction === 'ascending' ? 'descending' : 'ascending')
+                    : (key === 'uploaded' ? 'descending' : 'ascending');
+                jobSort = {key, direction};
+                renderJobs();
+            });
+            if (key === focusedSort) button.focus({preventScroll: true});
+        }
         if (caret !== null) {
             const field = document.getElementById('jobSearch');
             field.focus();
@@ -1508,6 +1566,10 @@
         `;
     }
 
+    function jobSizeLabel(job) {
+        return Number.isFinite(job.size_bytes) ? formatBytes(job.size_bytes) : '–';
+    }
+
     function createJobRow(job) {
         const jobEl = document.createElement('tr');
         jobEl.innerHTML = `
@@ -1517,7 +1579,7 @@
                 <span class="st-pill status-${job.status}">${statusLabel(job.status)}</span>
                 ${progressMarkup(job, '160px')}
             </td>
-            <td class="st-job-size">${job.duration || '-'}</td>
+            <td class="st-job-size">${jobSizeLabel(job)}</td>
             <td class="st-job-uploaded">${new Date(job.created_at).toLocaleString()}</td>
             <td style="text-align:right;position:relative;">
                 <div class="st-job-actions" style="justify-content:flex-end;">${jobActionsMarkup(job, 'row-actions')}</div>
@@ -1534,7 +1596,7 @@
             <div class="st-job-card-top">
                 <div>
                     <div class="st-job-filename"></div>
-                    <div class="st-job-card-meta">${job.duration || '-'} · ${new Date(job.created_at).toLocaleString()}</div>
+                    <div class="st-job-card-meta">${jobSizeLabel(job)} · ${new Date(job.created_at).toLocaleString()}</div>
                 </div>
                 <div class="st-job-selection"></div>
             </div>

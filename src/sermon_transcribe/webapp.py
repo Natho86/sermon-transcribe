@@ -1334,6 +1334,7 @@ def start_transcription():
     job_id = upload_id
     audio_path = upload_info["audio_path"]
     filename = upload_info["filename"]
+    created_at = datetime.utcnow().isoformat()
 
     # Create output directory
     output_dir = app.config["OUTPUT_FOLDER"] / job_id
@@ -1344,10 +1345,11 @@ def start_transcription():
         jobs[job_id] = {
             "job_id": job_id,
             "filename": filename,
+            "size_bytes": audio_path.stat().st_size,
             "status": "queued",
             "progress": 0,
             "message": "Job queued",
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": created_at,
             "updated_at": datetime.utcnow().isoformat(),
             "cleanup": do_cleanup,
             "language": language or config.language,
@@ -1365,7 +1367,7 @@ def start_transcription():
     with chunked_uploads_lock:
         del chunked_uploads[upload_id]
 
-    return jsonify({"job_id": job_id, "status": "queued"})
+    return jsonify({"job_id": job_id, "status": "queued", "created_at": created_at})
 
 
 @app.route("/upload", methods=["POST"])
@@ -1413,6 +1415,7 @@ def upload():
         jobs[job_id] = {
             "job_id": job_id,
             "filename": audio_filename,
+            "size_bytes": audio_path.stat().st_size,
             "status": "queued",
             "progress": 0,
             "message": "Job queued",
@@ -1585,7 +1588,10 @@ def upload_transcript():
 
     # Read transcript content
     try:
-        transcript_content = file.read().decode("utf-8").strip()
+        uploaded_bytes = file.read()
+        transcript_content = uploaded_bytes.decode("utf-8").strip()
+        size_bytes = len(uploaded_bytes)
+        del uploaded_bytes
     except UnicodeDecodeError:
         return jsonify({"error": "Invalid text file encoding. Please use UTF-8."}), 400
 
@@ -1602,15 +1608,17 @@ def upload_transcript():
     text_path.write_text(transcript_content, encoding="utf-8")
 
     status = "processing" if provider_info else "completed"
+    created_at = datetime.utcnow().isoformat()
     # Initialize job
     with jobs_lock:
         jobs[job_id] = {
             "job_id": job_id,
             "filename": file.filename,
+            "size_bytes": size_bytes,
             "status": status,
             "progress": 50 if provider_info else 100,
             "message": "Processing transcript..." if provider_info else "Transcript uploaded",
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": created_at,
             "updated_at": datetime.utcnow().isoformat(),
             "cleanup": do_cleanup,
             "text_path": str(text_path.absolute()),
@@ -1623,7 +1631,7 @@ def upload_transcript():
         )
         thread.start()
 
-    return jsonify({"job_id": job_id, "status": jobs[job_id]["status"]})
+    return jsonify({"job_id": job_id, "status": jobs[job_id]["status"], "created_at": created_at})
 
 
 @app.route("/status/<job_id>")
@@ -1831,6 +1839,7 @@ def queue_folder_jobs():
                 "folder_job": True,
                 "folder_key": plan.key,
                 "filename": plan.key,
+                "size_bytes": plan.versions[plan.audio or plan.transcript][2],
                 "status": "queued",
                 "progress": 0,
                 "message": "Folder job queued",
@@ -2104,6 +2113,13 @@ def load_existing_jobs():
                 "created_at": mtime.isoformat(),
                 "updated_at": mtime.isoformat(),
             }
+
+            source = find_original_audio(job_id) or raw_text_path or text_path
+            if source:
+                try:
+                    job_data["size_bytes"] = source.stat().st_size
+                except OSError:
+                    app.logger.debug("Could not read source size for job %s", job_id)
 
             if text_path and text_path.exists():
                 job_data["text_path"] = str(text_path.absolute())
